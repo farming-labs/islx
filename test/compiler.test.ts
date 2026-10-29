@@ -1,8 +1,8 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSync } from "oxc-parser";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ActionCompileError, getActionId, transformActions } from "@farmjs/islx/compiler";
 import {
   configureActionKeys,
@@ -41,9 +41,8 @@ function post(id: string, body: unknown) {
   );
 }
 
-afterAll(() => {
-  counter = 0;
-});
+beforeAll(() => mkdir(tmp, { recursive: true }));
+afterAll(() => rm(tmp, { recursive: true, force: true }));
 
 describe('"use server" modules', () => {
   const source = `"use server";
