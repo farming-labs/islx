@@ -19,7 +19,9 @@
   },
   "homepage": "https://github.com/farming-labs/islx#readme",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/react/server.mjs"
+  ],
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
@@ -43,6 +45,18 @@
     "./compiler": {
       "types": "./dist/compiler.d.mts",
       "default": "./dist/compiler.mjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.mts",
+      "default": "./dist/react.mjs"
+    },
+    "./react/server": {
+      "types": "./dist/react/server.d.mts",
+      "default": "./dist/react/server.mjs"
+    },
+    "./react/client": {
+      "types": "./dist/react/client.d.mts",
+      "default": "./dist/react/client.mjs"
     },
     "./package.json": "./package.json"
   },
@@ -79,5 +93,17 @@
     "is-reference": "3.0.3",
     "magic-string": "0.30.21",
     "periscopic": "4.0.3"
+  },
+  "peerDependencies": {
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   }
 }

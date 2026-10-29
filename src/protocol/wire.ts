@@ -23,6 +23,8 @@ export const TREE_SCRIPT_TYPE = "f/tree";
 export const CHUNK_SCRIPT_TYPE = "f/chunk";
 /** The element around server HTML inside a server tree. */
 export const HTML_ELEMENT = "f-html";
+/** The script type of React's form state after a `useActionState` form post, for hydration. */
+export const FORM_STATE_SCRIPT_TYPE = "f/form-state";
 
 /** The reserved JSON key whose value is a tag. */
 export const TAG = "$";
