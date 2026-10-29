@@ -36,6 +36,8 @@ export interface TransformActionsOptions {
   parse(code: string): AstNode;
   /** Mixed into every id, so ids of one build are not guessable from another's. */
   salt?: string;
+  /** The directive that marks actions, at the top of a module or a function. Default `"use server"`. */
+  directive?: string;
   /** Where the runtime is imported from. */
   runtime?: { server?: string; client?: string };
 }
@@ -119,11 +121,11 @@ const FUNCTION_TYPES = new Set([
   "ArrowFunctionExpression",
 ]);
 
-function isInlineAction(node: AstNode): boolean {
+function isInlineAction(node: AstNode, directive: string): boolean {
   return (
     FUNCTION_TYPES.has(node.type) &&
     node.body?.type === "BlockStatement" &&
-    hasDirective(node.body.body, "use server")
+    hasDirective(node.body.body, directive)
   );
 }
 
@@ -157,9 +159,10 @@ function actionName(node: AstNode, parent: AstNode | null): string | null {
 function collectExports(
   program: AstNode,
   fail: (message: string, node: AstNode) => never,
+  directive: string,
 ): ExportEntry[] {
   const exports: ExportEntry[] = [];
-  const onlyAsync = 'A "use server" module may export only async functions';
+  const onlyAsync = `A "${directive}" module may export only async functions`;
   const checkFunction = (node: AstNode, name: string) => {
     if (FUNCTION_TYPES.has(node.type)) {
       if (!node.async) fail(`${onlyAsync}: make ${name} async`, node);
@@ -180,7 +183,7 @@ function collectExports(
   for (const node of program.body ?? []) {
     if (node.type === "ExportAllDeclaration") {
       fail(
-        '"use server" modules cannot re-export with `export *`: export each action by name',
+        `"${directive}" modules cannot re-export with \`export *\`: export each action by name`,
         node,
       );
     }
@@ -188,7 +191,7 @@ function collectExports(
       if (node.exportKind === "type") continue;
       if (node.source) {
         fail(
-          '"use server" modules cannot re-export from another module: import the actions, then export them',
+          `"${directive}" modules cannot re-export from another module: import the actions, then export them`,
           node,
         );
       }
@@ -244,8 +247,9 @@ export function transformActions(options: TransformActionsOptions): TransformAct
   const salt = options.salt ?? "";
   const serverRuntime = options.runtime?.server ?? "@farmjs/islx/server";
   const clientRuntime = options.runtime?.client ?? "@farmjs/islx/client";
-  const moduleDirective = hasModuleDirective(code, "use server");
-  if (!moduleDirective && !code.includes("use server")) return null;
+  const directive = options.directive ?? "use server";
+  const moduleDirective = hasModuleDirective(code, directive);
+  if (!moduleDirective && !code.includes(directive)) return null;
 
   const program = options.parse(code);
   const file = id.split("?", 1)[0]!;
@@ -257,7 +261,7 @@ export function transformActions(options: TransformActionsOptions): TransformAct
   const label = (name: string) => `${name} (${relative})`;
 
   if (moduleDirective && environment === "client") {
-    const exports = collectExports(program, fail);
+    const exports = collectExports(program, fail, directive);
     const lines = [
       `import { createServerReference as $$islx_ref } from ${JSON.stringify(clientRuntime)};`,
     ];
@@ -298,11 +302,11 @@ export function transformActions(options: TransformActionsOptions): TransformAct
         scopeNodes.push(node);
       }
       if (FUNCTION_TYPES.has(node.type)) {
-        if (isInlineAction(node) && !(moduleDirective && functionDepth === 0)) {
+        if (isInlineAction(node, directive) && !(moduleDirective && functionDepth === 0)) {
           if (environment === "client") {
             fail(
-              'An inline "use server" function can only be written in server code. ' +
-                'Move it to a "use server" module and import it here',
+              `An inline "${directive}" function can only be written in server code. ` +
+                `Move it to a "${directive}" module and import it here`,
               node,
             );
           }
@@ -359,7 +363,7 @@ export function transformActions(options: TransformActionsOptions): TransformAct
           if (action.node.type === "FunctionDeclaration" && action.name === node.name) {
             fail(
               `The server action ${node.name} refers to itself. ` +
-                'To call it again, move it to a "use server" module',
+                `To call it again, move it to a "${directive}" module`,
               node,
             );
           }
@@ -445,7 +449,7 @@ export function transformActions(options: TransformActionsOptions): TransformAct
 
   if (moduleDirective) {
     usesReference = true;
-    for (const entry of collectExports(program, fail)) {
+    for (const entry of collectExports(program, fail, directive)) {
       if (!entry.local) {
         // `export default async function () {}`: give it a name to register.
         const declaration = entry.node.declaration as AstNode;

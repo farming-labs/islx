@@ -34,6 +34,12 @@ export interface IslxOptions {
   /** The environments that render on the server. Default: every environment but `client`. */
   serverEnvironments?: string[];
   /**
+   * The directives your code marks client modules and actions with. Default `"use client"` and
+   * `"use server"`; set others when another tool in the app already owns those. Libraries in
+   * `node_modules` always use `"use client"` (and their actions are never registered).
+   */
+  directives?: { client?: string; server?: string };
+  /**
    * Same-site links move between pages without loading a new document: the runtime, its code
    * and the values the browser holds stay. Default true; false loads every page.
    */
@@ -108,7 +114,39 @@ async function listOutput(directory: string): Promise<string[]> {
 
 const toPosix = (value: string) => value.split(path.sep).join("/");
 
+const RESERVED_DIRECTIVES = new Set(["use strict", "use asm"]);
+
+/** The directives to use, refusing ones that would make a file mean two things. */
+export function resolveDirectives(directives: IslxOptions["directives"] = {}): {
+  client: string;
+  server: string;
+} {
+  const client = directives.client ?? "use client";
+  const server = directives.server ?? "use server";
+  for (const [kind, value] of [
+    ["client", client],
+    ["server", server],
+  ] as const) {
+    if (
+      typeof value !== "string" ||
+      !/^[\w-]+( [\w-]+)*$/.test(value) ||
+      RESERVED_DIRECTIVES.has(value)
+    ) {
+      throw new Error(
+        `islx: directives.${kind} must be a plain directive such as "use island", not ${JSON.stringify(value)}`,
+      );
+    }
+  }
+  if (client === server) {
+    throw new Error(
+      `islx: directives.client and directives.server are both ${JSON.stringify(client)}`,
+    );
+  }
+  return { client, server };
+}
+
 export function islx(options: IslxOptions = {}): Plugin[] {
+  const directives = resolveDirectives(options.directives);
   let config: ResolvedConfig;
   let parse: Parse;
   let preamble = false;
@@ -210,7 +248,9 @@ export function islx(options: IslxOptions = {}): Plugin[] {
               .join(
                 "\n",
               )}\n};\nconst load = (src) => modules[src] ? modules[src]() : Promise.reject(new Error("islx: no client module " + src));`
-          : `const load = (src) => import(/* @vite-ignore */ ${JSON.stringify(config.base)} + src);`;
+          : // Modules outside the root (a hoisted library) are served from /@fs/.
+            `const root = new URL(${JSON.stringify(`file://${toPosix(config.root)}/`)});\n` +
+            `const load = (src) => import(/* @vite-ignore */ src.startsWith("../") ? "/@fs" + new URL(src, root).pathname : ${JSON.stringify(config.base)} + src);`;
         return [
           ...(preamble && !isBuild() ? [`import "@vitejs/plugin-react/preamble";`] : []),
           `import { createHydrationRuntime, refreshDocument, swapDocument } from "@farmjs/islx/react/client";`,
@@ -229,13 +269,14 @@ export function islx(options: IslxOptions = {}): Plugin[] {
       return undefined;
     },
     transform(code, id) {
-      if (
-        id.startsWith("\0") ||
-        id.includes("/node_modules/") ||
-        !SCRIPT.test(id.split("?", 1)[0]!)
-      )
+      if (id.startsWith("\0") || !SCRIPT.test(id.split("?", 1)[0]!)) return null;
+      // A library: its "use client" components become islands (when Vite bundles it for the
+      // server), and nothing in it registers actions.
+      const library = id.includes("/node_modules/");
+      const clientDirective = library ? "use client" : directives.client;
+      if (!code.includes(clientDirective) && (library || !code.includes(directives.server))) {
         return null;
-      if (!code.includes("use client") && !code.includes("use server")) return null;
+      }
       const file = id.split("?", 1)[0]!;
       const server = isServer(this.environment.name);
       const relative = relativeOf(file);
@@ -248,34 +289,36 @@ export function islx(options: IslxOptions = {}): Plugin[] {
           root: config.root,
           parse: parseFile,
           reference: (relative) => {
-            if (relative.startsWith("..")) {
-              throw new Error(
-                `islx: client component ${relative} is outside the root ${config.root}`,
-              );
-            }
+            // Outside the root (a hoisted library) it starts with "../": still a stable name.
             discovered.add(relative);
             return JSON.stringify(relative);
           },
           sideEffects: [RUNTIME_ID],
+          directive: clientDirective,
         });
         if (island) {
           // Client code: an inline action in it is a mistake, caught as the browser build would.
-          transformActions({
-            code,
-            id: file,
-            root: config.root,
-            environment: "client",
-            parse: parseFile,
-          });
+          if (!library) {
+            transformActions({
+              code,
+              id: file,
+              root: config.root,
+              environment: "client",
+              parse: parseFile,
+              directive: directives.server,
+            });
+          }
           return { code: island.code, map: island.map };
         }
       }
+      if (library) return null;
       const actions = transformActions({
         code,
         id: file,
         root: config.root,
         environment: server ? "server" : "client",
         parse: parseFile,
+        directive: directives.server,
       });
       if (!actions) return null;
       return {

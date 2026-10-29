@@ -33,6 +33,8 @@ export interface TransformClientOptions {
   runtime?: string;
   /** Modules the island wrapper imports for their side effects (the plugin's runtime setup). */
   sideEffects?: readonly string[];
+  /** The directive that marks a module of client components. Default `"use client"`. */
+  directive?: string;
 }
 
 export interface TransformClientResult {
@@ -112,7 +114,7 @@ export function transformClientModule(
   options: TransformClientOptions,
 ): TransformClientResult | null {
   const { code, id, root } = options;
-  if (!hasModuleDirective(code, "use client")) return null;
+  if (!hasModuleDirective(code, options.directive ?? "use client")) return null;
   const file = id.split("?", 1)[0]!;
   const relative = path.relative(root, file).split(path.sep).join("/");
   const program = options.parse(code);
