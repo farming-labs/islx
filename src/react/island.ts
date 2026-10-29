@@ -7,7 +7,9 @@
  * build. The browser build keeps the module as it is.
  */
 import * as React from "react";
+import { preloadModule } from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
+import { getBuildDefaults } from "../server/build";
 import {
   ISLAND_ELEMENT,
   PROPS_SCRIPT_TYPE,
@@ -176,6 +178,13 @@ export function createIsland<P extends object>(
         );
       }
       return React.createElement(Component, props);
+    }
+
+    // The island's code starts loading with the page, not after the entry runs. React writes the
+    // links into the head, once each. Deferred islands keep their code for later.
+    if (strategy === "load") {
+      for (const href of getBuildDefaults().modules?.[src] ?? [])
+        preloadModule(href, { as: "script" });
     }
 
     return React.createElement(

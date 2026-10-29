@@ -8,6 +8,11 @@ export interface BuildDefaults {
   entry?: string;
   /** A key made for this build: every instance of one build shares it. */
   key?: string;
+  /**
+   * The browser files each client module needs (its chunk first, then the chunks it imports), by
+   * the module's path from the root: an island preloads them, so they load alongside the entry.
+   */
+  modules?: Record<string, string[]>;
 }
 
 const BUILD_KEY = Symbol.for("islx.build");
