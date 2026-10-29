@@ -126,6 +126,10 @@ export function Chart(props: { points: Map<string, number> }) { … }
   scroll and focus behave as page loads do. `islx({ navigation: false })` turns it off;
   `rel="external"` opts one link out; `navigate(href)` from `@farmjs/islx/client` navigates from
   code.
+- `islx({ directives: { client: "use island", server: "use action" } })` renames the directives
+  your code uses, for apps where another tool already owns `"use client"` or `"use server"`.
+  Libraries keep `"use client"`: their components become islands when Vite bundles them for the
+  server (`ssr.noExternal`), and their `"use server"` never registers an action.
 - Each build makes its own key for sealed action values; set `ISLX_ACTIONS_KEY` to keep forms
   working across deploys.
 
