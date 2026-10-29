@@ -7,3 +7,6 @@ coverage
 .env.*
 !.env.example
 test/.tmp
+test-results
+playwright-report
+examples/*/dist

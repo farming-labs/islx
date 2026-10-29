@@ -71,17 +71,67 @@ rotated-out key in `ISLX_ACTIONS_PREVIOUS_KEYS` so open pages keep working.
 
 - Every registered action is a public endpoint, as in React and Next.js: check inputs and rights
   inside it.
-- Arguments carry the typed values above and `FormData` (as the only argument); `File` and
-  `Blob` arguments outside a form are not supported yet.
+- Arguments carry the typed values above, `FormData`, `File` and `Blob`.
 - Actions are not removed from the server build when nothing imports them yet.
+
+## On Vite
+
+```ts
+// vite.config.ts
+import react from "@vitejs/plugin-react";
+import { islx } from "@farmjs/islx/vite";
+
+export default defineConfig({
+  plugins: [react(), islx()],
+  environments: {
+    ssr: { build: { outDir: "dist/server", rollupOptions: { input: "src/entry-server.tsx" } } },
+  },
+});
+```
+
+```tsx
+// src/entry-server.tsx
+import { renderToStream } from "@farmjs/islx/react/server";
+import { handleAction } from "@farmjs/islx/server";
+
+export async function handle(request: Request) {
+  const action = await handleAction(request, {
+    renderFormState: (formState) => page(request, formState),
+  });
+  return action ?? page(request);
+}
+
+async function page(request: Request, formState?) {
+  const stream = await renderToStream(<App />, { request, formState });
+  return new Response(stream, { headers: { "content-type": "text/html", "cache-control": "private" } });
+}
+```
+
+```tsx
+// src/components/chart.tsx
+"use client";
+export const hydrate = "visible"; // or { Chart: "visible", Legend: "idle" }; default "load"
+export function Chart(props: { points: Map<string, number> }) { … }
+```
+
+- Components are server components unless their module says `"use client"`; those render as
+  islands, and the page needs no other setup: `renderToStream` adds the browser entry.
+- `vite build` builds the server, then the browser with exactly the client components the server
+  rendered, each in its own chunk. `islx({ clientComponents: { include, exclude } })` adds
+  components the server build cannot see (chosen by name at runtime) or leaves some out.
+- Forms in server components submit without a reload once JavaScript runs, and post normally
+  before.
+- Each build makes its own key for sealed action values; set `ISLX_ACTIONS_KEY` to keep forms
+  working across deploys.
+
+`examples/react` is a runnable app; `pnpm test:e2e` runs it in Chrome, in development and from
+its production build.
 
 ## Planned
 
 | Entry | For |
 | --- | --- |
-| `@farmjs/islx/react` | server trees (a page rebuilt inside a hydrated layout) |
-| `@farmjs/islx/compiler` | `"use client"` islands (actions are done) |
-| `@farmjs/islx/vite` | Vite, and frameworks built on it (Astro, Nuxt, SvelteKit, Farm) |
+| `@farmjs/islx/react` | server trees (a page rebuilt inside a hydrated layout), partial navigations |
 | `@farmjs/islx/webpack` | webpack, Rspack, and Next.js (Turbopack uses the loader) |
 | `@farmjs/islx/next`, `@farmjs/islx/astro`, `@farmjs/islx/nuxt` | thin framework integrations |
 | `@farmjs/islx/testing` | the conformance suite every integration must pass |

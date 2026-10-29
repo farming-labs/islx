@@ -11,13 +11,18 @@ import {
   ACTION_HEADER,
   ACTION_KEY_FIELD,
   ACTION_STALE_HEADER,
+  BLOB_TAG,
   BOUND_FIELD,
-  FORM_FIELD_PREFIX,
+  CALL_FIELD,
+  FORM_DATA_TAG,
   FORM_REF_PREFIX,
   REFERENCE_TAG,
   SLOT_TAG,
   TAG,
-  formFieldName,
+  TAG_VALUE,
+  attachmentField,
+  readPostedAction,
+  stripRuntimeFields,
 } from "../protocol/wire";
 import { decodeActionReference, encodeActionReference, resolveAction } from "./actions";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
@@ -98,27 +103,6 @@ function looksLikeActionForm(head: Uint8Array): boolean {
   return start.includes(FORM_REF_PREFIX) || start.includes(`%24F_REF_`);
 }
 
-/** The action a form posted: the last `$F_REF_` field names it, so a clicked button wins. */
-function postedFormAction(form: FormData): { id: string; token?: string } | null {
-  let prefix: string | null = null;
-  for (const key of form.keys()) {
-    if (key.startsWith(FORM_REF_PREFIX)) prefix = key.slice(FORM_REF_PREFIX.length);
-  }
-  if (prefix === null) return null;
-  const id = form.get(formFieldName(prefix, "A"));
-  const token = form.get(formFieldName(prefix, "B"));
-  if (typeof id !== "string") return null;
-  return { id, token: typeof token === "string" ? token : undefined };
-}
-
-/** Removes the runtime's fields, so the action sees only the form's own. */
-function stripRuntimeFields(form: FormData): void {
-  // A snapshot of the keys: deleting while iterating the form itself skips entries.
-  for (const key of new Set(form.keys())) {
-    if (key.startsWith(FORM_FIELD_PREFIX) || key === ACTION_KEY_FIELD) form.delete(key);
-  }
-}
-
 /** Runs the server action a request posts, or returns null when it posts none. */
 export async function handleAction(
   request: Request,
@@ -147,12 +131,43 @@ export async function handleAction(
     let args: unknown[];
     let token: string | undefined;
     try {
-      if (contentType.startsWith("multipart/form-data")) {
-        const form = await parseForm(request, body);
+      const form = contentType.startsWith("multipart/form-data")
+        ? await parseForm(request, body)
+        : null;
+      const call = form?.get(CALL_FIELD);
+      if (form && typeof call !== "string") {
+        // One FormData argument, as a form posts it.
         const bound = form.get(BOUND_FIELD);
         token = typeof bound === "string" ? bound : undefined;
         form.delete(BOUND_FIELD);
         args = [form];
+      } else if (form) {
+        // JSON arguments whose form data and files travel as fields.
+        const payload = JSON.parse(call as string) as { a?: unknown; b?: unknown };
+        if (!payload || typeof payload !== "object" || Array.isArray(payload))
+          throw new TypeError();
+        const decodeReference = (object: Record<string, unknown>) => {
+          const index = object[TAG_VALUE];
+          if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return undefined;
+          if (object[TAG] === BLOB_TAG) {
+            const file = form.get(attachmentField(index));
+            return typeof file === "string" || file === null ? undefined : file;
+          }
+          if (object[TAG] === FORM_DATA_TAG) {
+            const prefix = attachmentField(index, "");
+            const data = new FormData();
+            for (const [key, value] of form) {
+              if (key.startsWith(prefix)) data.append(key.slice(prefix.length), value);
+            }
+            return data;
+          }
+          return decodeArgumentReference(object);
+        };
+        const decoded = decode(payload.a ?? [], { decodeReference });
+        if (!Array.isArray(decoded)) throw new TypeError("arguments must be an array");
+        if (payload.b !== undefined && typeof payload.b !== "string") throw new TypeError();
+        args = decoded;
+        token = payload.b as string | undefined;
       } else {
         const payload = JSON.parse(new TextDecoder().decode(body) || "{}") as {
           a?: unknown;
@@ -221,7 +236,7 @@ export async function handleAction(
   } catch {
     return null;
   }
-  const posted = postedFormAction(form);
+  const posted = readPostedAction(form);
   if (!posted) return null;
   if (!isSameOriginRequest(request, allowedOrigins)) return text(403, "Forbidden");
   if (

@@ -12,7 +12,11 @@ import {
   ACTION_HEADER,
   ACTION_STALE_HEADER,
   ACTION_TAG,
+  BLOB_TAG,
   BOUND_FIELD,
+  CALL_FIELD,
+  FORM_DATA_TAG,
+  attachmentField,
   TAG,
   TAG_BOUND,
   TAG_VALUE,
@@ -93,8 +97,37 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     if (reference.token !== undefined) form.append(BOUND_FIELD, reference.token);
     body = form;
   } else {
-    headers["content-type"] = "text/plain;charset=UTF-8";
-    body = JSON.stringify({ a: encode(all, { encodeFunction }), b: reference.token });
+    // Form data and files travel as multipart fields; the JSON names them by index.
+    const attachments: Array<FormData | Blob> = [];
+    const encodeObject = (value: object) => {
+      if (value instanceof FormData || value instanceof Blob) {
+        attachments.push(value);
+        return {
+          [TAG]: value instanceof FormData ? FORM_DATA_TAG : BLOB_TAG,
+          [TAG_VALUE]: attachments.length - 1,
+        };
+      }
+      return undefined;
+    };
+    const json = JSON.stringify({
+      a: encode(all, { encodeFunction, encodeObject }),
+      b: reference.token,
+    });
+    if (attachments.length === 0) {
+      headers["content-type"] = "text/plain;charset=UTF-8";
+      body = json;
+    } else {
+      const form = new FormData();
+      form.append(CALL_FIELD, json);
+      attachments.forEach((attachment, index) => {
+        if (attachment instanceof FormData) {
+          for (const [key, value] of attachment) form.append(attachmentField(index, key), value);
+        } else {
+          form.append(attachmentField(index), attachment);
+        }
+      });
+      body = form;
+    }
   }
   const response = await fetch(location.href, {
     method: "POST",

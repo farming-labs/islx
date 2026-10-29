@@ -353,3 +353,51 @@ describe("calls from JavaScript", () => {
     expect(await handleAction(new Request(`${ORIGIN}/todos`))).toBeNull();
   });
 });
+
+describe("calls with form data and files", () => {
+  it("rebuild FormData and File arguments from multipart fields", async () => {
+    const received: unknown[] = [];
+    registerServerReference(async (...args: unknown[]) => {
+      received.push(...args);
+      return "ok";
+    }, "with-attachments");
+    const data = new FormData();
+    data.append(
+      "$F_CALL",
+      JSON.stringify({ a: [{ votes: 1 }, { $: "F", v: 0 }, { $: "K", v: 1 }] }),
+    );
+    data.append("$F_0_by", "2");
+    data.append("$F_0_tag", "a");
+    data.append("$F_0_tag", "b");
+    data.append("$F_1", new File(["hello"], "note.txt", { type: "text/plain" }));
+    const response = await handleAction(
+      new Request(`${ORIGIN}/votes`, {
+        method: "POST",
+        headers: { "F-Action": "with-attachments", origin: ORIGIN },
+        body: data,
+      }),
+    );
+    expect(await response!.json()).toEqual({ result: "ok" });
+    expect(received[0]).toEqual({ votes: 1 });
+    const form = received[1] as FormData;
+    expect(form.get("by")).toBe("2");
+    expect(form.getAll("tag")).toEqual(["a", "b"]);
+    const file = received[2] as File;
+    expect(file.name).toBe("note.txt");
+    expect(await file.text()).toBe("hello");
+  });
+
+  it("refuse an attachment that is not there", async () => {
+    registerServerReference(async () => "ok", "missing-attachment");
+    const data = new FormData();
+    data.append("$F_CALL", JSON.stringify({ a: [{ $: "K", v: 3 }] }));
+    const response = await handleAction(
+      new Request(`${ORIGIN}/x`, {
+        method: "POST",
+        headers: { "F-Action": "missing-attachment", origin: ORIGIN },
+        body: data,
+      }),
+    );
+    expect(response!.status).toBe(400);
+  });
+});

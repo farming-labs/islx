@@ -16,7 +16,17 @@
  * Decoding accepts input from the browser (server action arguments): it builds plain objects
  * without assigning `__proto__`, and rejects unknown or malformed tags.
  */
-import { ACTION_TAG, OBJECT_TAG, REFERENCE_TAG, SLOT_TAG, TAG, TAG_VALUE, getTag } from "./wire";
+import {
+  ACTION_TAG,
+  BLOB_TAG,
+  FORM_DATA_TAG,
+  OBJECT_TAG,
+  REFERENCE_TAG,
+  SLOT_TAG,
+  TAG,
+  TAG_VALUE,
+  getTag,
+} from "./wire";
 
 const TYPED_ARRAYS = {
   Int8Array,
@@ -130,6 +140,8 @@ export function decodeTagged(
     case REFERENCE_TAG:
     case SLOT_TAG:
     case ACTION_TAG:
+    case FORM_DATA_TAG:
+    case BLOB_TAG:
       return NOT_A_VALUE;
     case OBJECT_TAG:
       if (data && typeof data === "object" && !Array.isArray(data)) {
@@ -231,6 +243,11 @@ export interface EncodeOptions {
    * functions throw.
    */
   encodeFunction?: (value: Function) => unknown;
+  /**
+   * Encodes an object the codec cannot carry itself (`FormData`, a `Blob`), or returns
+   * undefined to refuse it.
+   */
+  encodeObject?: (value: object) => unknown;
   /** Names the root of the value in error messages. */
   path?: readonly (string | number)[];
 }
@@ -302,6 +319,8 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
       }
       const prototype = Object.getPrototypeOf(value);
       if (prototype !== Object.prototype && prototype !== null) {
+        const special = options.encodeObject?.(value as object);
+        if (special !== undefined) return special;
         const name = (value as object).constructor?.name;
         return fail(`class instances${name ? ` (${name})` : ""} are not serializable`);
       }
