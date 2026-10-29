@@ -6,6 +6,7 @@
 import * as React from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { createServerReference } from "../client/actions";
+import { emit } from "../client/hooks";
 import { HYDRATED_ATTRIBUTE, scheduleHydration, type IslandStrategy } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged } from "../protocol/codec";
@@ -163,6 +164,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
     error: unknown,
   ) => {
     report(`Could not hydrate ${exportName} (${src}). Its server HTML was restored.`, error);
+    emit("islandError", { element: container, src, export: exportName, error });
     queueMicrotask(() => {
       try {
         roots.get(container)?.root.unmount();
@@ -191,10 +193,22 @@ export function createHydrationRuntime(options: HydrationOptions) {
     }
   }
 
+  /** Calls `onCommit` once, when React first commits the island: it is interactive then. */
+  function Committed({ onCommit, children }: { onCommit?: () => void; children: React.ReactNode }) {
+    const called = React.useRef(false);
+    React.useLayoutEffect(() => {
+      if (called.current || !onCommit) return;
+      called.current = true;
+      onCommit();
+    }, [onCommit]);
+    return children as React.ReactElement;
+  }
+
   const element = (
     Component: React.ComponentType<any>,
     props: Record<string, unknown>,
     restore: (error: unknown) => void,
+    onCommit?: () => void,
   ) => {
     const { graph } = getContexts();
     const inner = React.createElement(Component, props);
@@ -204,7 +218,10 @@ export function createHydrationRuntime(options: HydrationOptions) {
       React.createElement(
         Boundary,
         { onError: restore },
-        options.wrap ? options.wrap(inner) : inner,
+        React.createElement(Committed, {
+          onCommit,
+          children: options.wrap ? options.wrap(inner) : inner,
+        }),
       ),
     );
   };
@@ -275,6 +292,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
 
         let scheduled: Promise<unknown>;
         try {
+          const scheduledAt = performance.now();
           scheduled = schedule({
             container,
             strategy,
@@ -301,9 +319,17 @@ export function createHydrationRuntime(options: HydrationOptions) {
                   controller.abort();
                 };
                 let disposing = false;
+                const onCommit = () =>
+                  emit("hydrate", {
+                    element: container,
+                    src,
+                    export: exportName,
+                    strategy,
+                    duration: performance.now() - scheduledAt,
+                  });
                 const root = hydrateRoot(
                   container,
-                  element(Component as React.ComponentType<any>, props, restore),
+                  element(Component as React.ComponentType<any>, props, restore, onCommit),
                   {
                     formState: formState as never,
                     onUncaughtError: restore,

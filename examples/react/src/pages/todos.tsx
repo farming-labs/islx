@@ -45,6 +45,9 @@ export default async function Todos() {
           <li key={index}>{item.title}</li>
         ))}
       </ul>
+      <p data-testid="inbox-actions">
+        inbox actions {(globalThis as any).__islxActionCounts?.addToInbox ?? 0}
+      </p>
       <Clicks />
       <Votes vote={vote} />
       <Rename rename={rename} />

@@ -130,6 +130,34 @@ export function Chart(props: { points: Map<string, number> }) { … }
   your code uses, for apps where another tool already owns `"use client"` or `"use server"`.
   Libraries keep `"use client"`: their components become islands when Vite bundles them for the
   server (`ssr.noExternal`), and their `"use server"` never registers an action.
+- Lifecycle hooks go in the plugin's options:
+
+  ```ts
+  islx({
+    navigation: { viewTransition: true },
+    hooks: {
+      client: {
+        navigate(event) { if (window.unsaved) event.preventDefault(); },  // stay on the page
+        navigated({ url, duration }) { window.plausible?.("pageview", { u: url.href }); },
+        hydrate({ export: name, duration }) { console.debug(name, "interactive in", duration); },
+        islandError({ src, error }) { console.error(src, error); },
+        actionEnd({ name, ok, duration }) {},
+      },
+      server: {
+        async action({ request, name, module }, run) { /* check, log, time */ return run(); },
+        actionError: (error) => (error instanceof Unauthorized ? { status: 401 } : undefined),
+        error(error, { name }) {},
+      },
+    },
+  })
+  ```
+
+  Callbacks are copied into the browser or server build as source, so they may use only their
+  arguments and globals; the build names anything else they use. Hooks that import app code (an
+  auth helper, an error reporter) go in a module: `hooks: { server: "./src/islx.server.ts" }`,
+  exporting `defineServerHooks({ … })` (or `defineClientHooks`). Every client hook also fires as a
+  DOM event on `document`: `f:navigate`, `f:navigated`, `f:navigate-error`, `f:hydrate`,
+  `f:island-error`, `f:action`, `f:action-end`.
 - Each build makes its own key for sealed action values; set `ISLX_ACTIONS_KEY` to keep forms
   working across deploys.
 

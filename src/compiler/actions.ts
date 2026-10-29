@@ -266,7 +266,7 @@ export function transformActions(options: TransformActionsOptions): TransformAct
       `import { createServerReference as $$islx_ref } from ${JSON.stringify(clientRuntime)};`,
     ];
     for (const entry of exports) {
-      const reference = `$$islx_ref(${JSON.stringify(actionId(entry.exported))})`;
+      const reference = `$$islx_ref(${JSON.stringify(actionId(entry.exported))}, undefined, ${JSON.stringify(entry.exported === "default" ? "default" : entry.exported)})`;
       lines.push(
         entry.exported === "default"
           ? `export default ${reference};`

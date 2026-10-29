@@ -19,3 +19,11 @@ export {
   type NavigateOptions,
   type NavigationOptions,
 } from "./client/navigation";
+export {
+  defineClientHooks,
+  hookEventName,
+  setClientHooks,
+  type ClientHookEvent,
+  type ClientHookEvents,
+  type ClientHooks,
+} from "./client/hooks";

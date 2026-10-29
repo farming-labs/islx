@@ -396,7 +396,7 @@ export function decodeActionReference(object: Record<string, unknown>): AnyFunct
 
 /** The outcome of resolving a posted action. */
 export type ResolvedAction =
-  | { ok: true; run(args: unknown[]): Promise<unknown>; boundCount: number }
+  | { ok: true; run(args: unknown[]): Promise<unknown>; boundCount: number; label: string }
   | { ok: false; reason: "unknown" | "stale" | "invalid" };
 
 /** Finds the action an id names, and opens its sealed values. */
@@ -419,6 +419,7 @@ export async function resolveAction(
   return {
     ok: true,
     boundCount: values.length - entry.captured,
+    label: entry.label,
     run: async (args) => runEntry(entry, values, args),
   };
 }

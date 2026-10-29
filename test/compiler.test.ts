@@ -61,7 +61,7 @@ export default async function () {}
       'import { createServerReference as $$islx_ref } from "@farmjs/islx/client";',
     );
     expect(output).toContain(
-      `export const save = $$islx_ref(${JSON.stringify(getActionId(root, "/app/src/page.tsx", "save"))});`,
+      `export const save = $$islx_ref(${JSON.stringify(getActionId(root, "/app/src/page.tsx", "save"))}, undefined, "save");`,
     );
     expect(output).toContain("export const rename = $$islx_ref(");
     expect(output).toContain("export default $$islx_ref(");

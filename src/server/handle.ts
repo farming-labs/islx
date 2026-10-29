@@ -24,7 +24,13 @@ import {
   readPostedAction,
   stripRuntimeFields,
 } from "../protocol/wire";
-import { decodeActionReference, encodeActionReference, resolveAction } from "./actions";
+import {
+  decodeActionReference,
+  encodeActionReference,
+  resolveAction,
+  type ResolvedAction,
+} from "./actions";
+import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
 
@@ -112,8 +118,29 @@ export async function handleAction(
   const allowedOrigins = (options.allowedOrigins ?? []).map(normalizeAllowedOrigin);
   const limit = options.bodySizeLimit ?? DEFAULT_BODY_SIZE_LIMIT;
   const run = options.run ?? (<T>(_request: Request, action: () => Promise<T>) => action());
-  const report =
-    options.onError ?? ((error: unknown) => console.error("[islx] Server action failed:", error));
+  const hooks = getServerHooks();
+  /** Runs a resolved action through the app's hooks; maps what it throws. */
+  const execute = async (
+    resolved: Extract<ResolvedAction, { ok: true }>,
+    id: string,
+    args: unknown[],
+  ): Promise<{ result: unknown } | { error: unknown; outcome?: ActionErrorOutcome }> => {
+    const info: ActionInfo = { request, ...describeAction(id, resolved.label) };
+    const invoke = () => resolved.run(args);
+    try {
+      return {
+        result: await run(request, hooks.action ? () => hooks.action!(info, invoke) : invoke),
+      };
+    } catch (error) {
+      const outcome = options.mapError?.(error) ?? hooks.actionError?.(error, info);
+      if (!outcome?.redirect && !outcome?.status) {
+        if (options.onError) options.onError(error);
+        else if (hooks.error) hooks.error(error, info);
+        else console.error("[islx] Server action failed:", error);
+      }
+      return { error, outcome };
+    }
+  };
   const id = request.headers.get(ACTION_HEADER);
   const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
 
@@ -191,20 +218,19 @@ export async function handleAction(
         ? text(400, "Bad Request")
         : text(resolved.reason === "unknown" ? 404 : 409, "Stale Action", STALE);
     }
-    let result: unknown;
-    try {
-      result = await run(request, () => resolved.run(args));
-    } catch (error) {
-      const outcome = options.mapError?.(error);
-      if (outcome?.redirect) return json({ redirect: outcome.redirect });
-      if (outcome?.status) return text(outcome.status, "Server action failed");
-      report(error);
+    const ran = await execute(resolved, id, args);
+    if ("error" in ran) {
+      if (ran.outcome?.redirect) return json({ redirect: ran.outcome.redirect });
+      if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
       return text(500, "Server action failed");
     }
     try {
-      return json({ result: encode(result, { encodeFunction: encodeActionReference }) });
+      return json({ result: encode(ran.result, { encodeFunction: encodeActionReference }) });
     } catch (error) {
-      report(
+      (
+        options.onError ??
+        ((reason: unknown) => console.error("[islx] Server action failed:", reason))
+      )(
         new TypeError(
           `the server action's result is not serializable: ${(error as Error).message}`,
         ),
@@ -254,16 +280,13 @@ export async function handleAction(
     // Rendered by another deploy: load the page again, as it is now.
     return resolved.reason === "invalid" ? text(400, "Bad Request") : seeOther(back);
   }
-  let result: unknown;
-  try {
-    result = await run(request, () => resolved.run([form]));
-  } catch (error) {
-    const outcome = options.mapError?.(error);
-    if (outcome?.redirect) return seeOther(outcome.redirect);
-    if (outcome?.status) return text(outcome.status, "Server action failed");
-    report(error);
+  const ran = await execute(resolved, posted.id, [form]);
+  if ("error" in ran) {
+    if (ran.outcome?.redirect) return seeOther(ran.outcome.redirect);
+    if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
     return text(500, "Server action failed");
   }
+  const result = ran.result;
   if (typeof actionKey === "string" && options.renderFormState) {
     // The hook bound its previous state as the last argument; React compares the action
     // without it, as Flight does.
