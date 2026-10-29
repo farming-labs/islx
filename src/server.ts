@@ -1,4 +1,4 @@
-/** islx/server: values sent once, and sealing an action's captured values. Server only. */
+/** @farmjs/islx/server: values sent once, sealing, and server actions. Server only. */
 export {
   VALUE_MIN_LENGTH,
   addressValues,
@@ -19,3 +19,22 @@ export {
   type ActionKeys,
   type SealOptions,
 } from "./server/seal";
+export {
+  bindInlineAction,
+  configureActionKeys,
+  decodeActionReference,
+  encodeActionReference,
+  getActionReference,
+  registerInlineAction,
+  registerServerReference,
+  resolveAction,
+  type ActionReference,
+  type ResolvedAction,
+} from "./server/actions";
+export {
+  handleAction,
+  type ActionErrorOutcome,
+  type HandleActionOptions,
+  type ReactFormState,
+} from "./server/handle";
+export { isSameOriginRequest, matchesAllowedOrigin, normalizeAllowedOrigin } from "./server/origin";

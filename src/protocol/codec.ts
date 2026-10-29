@@ -297,6 +297,9 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
           }),
         );
       }
+      if (typeof (value as { $$typeof?: unknown }).$$typeof === "symbol") {
+        return fail("elements (JSX) are not serializable");
+      }
       const prototype = Object.getPrototypeOf(value);
       if (prototype !== Object.prototype && prototype !== null) {
         const name = (value as object).constructor?.name;

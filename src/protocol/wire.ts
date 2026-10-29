@@ -49,9 +49,28 @@ export const RENDER_HEADER = "F-Render";
 /** Request header: the server action a client calls. */
 export const ACTION_HEADER = "F-Action";
 
-/** Form field: the server action a form posts to. */
-export const ACTION_FIELD = "$F_ACTION";
-/** Form field: the action's sealed captured values. */
+/** Response header: the action id is unknown here, as after a deploy. The page should reload. */
+export const ACTION_STALE_HEADER = "F-Action-Stale";
+
+/**
+ * A form or button posting a server action without JavaScript. React names the field (a hidden
+ * input for a form, the button's own name for a button) and writes the data fields after it; the
+ * last name a submission carries is the action that runs, so a clicked button wins over its form.
+ *
+ *   <input type="hidden" name="$F_REF_R_1_">
+ *   <input type="hidden" name="$F_R_1_:A" value="…action id…">
+ *   <input type="hidden" name="$F_R_1_:B" value="…sealed values…">
+ */
+export const FORM_REF_PREFIX = "$F_REF_";
+/** A form field of the action posted under `prefix`: `A` its id, `B` its sealed values. */
+export function formFieldName(prefix: string, field: "A" | "B"): string {
+  return `$F_${prefix}:${field}`;
+}
+/** Every form field the runtime owns starts with this, and is removed before an action runs. */
+export const FORM_FIELD_PREFIX = "$F_";
+/** React's field naming which `useActionState` hook a form posted from. */
+export const ACTION_KEY_FIELD = "$ACTION_KEY";
+/** A `FormData` argument's field for its action's sealed values, in calls from JavaScript. */
 export const BOUND_FIELD = "$F_BOUND";
 
 /** A value key: 14 base-36 characters. */

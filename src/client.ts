@@ -1,7 +1,13 @@
-/** islx/client: the browser side. */
+/** @farmjs/islx/client: the browser side. */
 export {
   createValueStore,
   getValueStore,
   valueHeaders,
   type ValueStore,
 } from "./client/value-store";
+export {
+  createServerReference,
+  decodeActionReference,
+  setActionNavigator,
+  type ActionNavigator,
+} from "./client/actions";

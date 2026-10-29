@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     client: "src/client.ts",
     server: "src/server.ts",
+    compiler: "src/compiler.ts",
   },
   format: "esm",
   platform: "neutral",
@@ -12,6 +13,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: true,
+  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic"],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
   },
