@@ -8,6 +8,7 @@
  * page.
  */
 import { decode, encode } from "../protocol/codec";
+import { emit } from "./hooks";
 import {
   ACTION_HEADER,
   ACTION_STALE_HEADER,
@@ -36,6 +37,10 @@ interface ClientReference {
   id: string;
   token?: string;
   bound: unknown[];
+  /** The action's name, for hooks: the export name of an imported action. */
+  name?: string;
+  /** Set by a call answered with a redirect, for the `actionEnd` hook. */
+  redirect?: string;
 }
 
 const STATE_KEY = Symbol.for("islx.actions.client");
@@ -143,6 +148,7 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
   const payload = (await response.json()) as { result?: unknown; redirect?: string };
   const navigator = state().navigator;
   if (typeof payload.redirect === "string") {
+    reference.redirect = payload.redirect;
     if (navigator.navigate) await navigator.navigate(payload.redirect);
     else location.assign(payload.redirect);
     return undefined;
@@ -157,7 +163,33 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
 function createReference(reference: ClientReference): AnyFunction {
   const client = state();
   const fn = (...args: unknown[]) => {
-    const result = client.queue.then(() => call(reference, args));
+    const { id, name } = reference;
+    let startedAt = 0;
+    const run = async () => {
+      emit("action", { id, name });
+      startedAt = performance.now();
+      reference.redirect = undefined;
+      return call(reference, args);
+    };
+    const result = client.queue.then(run).then(
+      (value) => {
+        if (value !== STALE) {
+          const { redirect } = reference;
+          emit("actionEnd", {
+            id,
+            name,
+            ok: true,
+            duration: performance.now() - startedAt,
+            redirect,
+          });
+        }
+        return value;
+      },
+      (error: unknown) => {
+        emit("actionEnd", { id, name, ok: false, duration: performance.now() - startedAt, error });
+        throw error;
+      },
+    );
     // The next call waits for this one, whether it succeeds or not.
     client.queue = result.then(
       () => {},
@@ -176,12 +208,12 @@ function createReference(reference: ClientReference): AnyFunction {
 }
 
 /** The function that calls a server action; one per id and sealed values, so props keep identity. */
-export function createServerReference(id: string, token?: string): AnyFunction {
+export function createServerReference(id: string, token?: string, name?: string): AnyFunction {
   const key = token === undefined ? id : `${id}\0${token}`;
   const references = state().references;
   let reference = references.get(key);
   if (!reference) {
-    reference = createReference({ id, token, bound: [] });
+    reference = createReference({ id, token, bound: [], name });
     references.set(key, reference);
   }
   return reference;

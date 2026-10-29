@@ -17,9 +17,13 @@
 import { randomBytes } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { walk } from "estree-walker";
+import { analyze } from "periscopic";
 import type { Plugin, ResolvedConfig, ViteBuilder } from "vite";
+import type { ClientHooks } from "./client/hooks";
 import { transformActions, type AstNode } from "./compiler/actions";
 import { transformClientModule } from "./compiler/client";
+import type { ServerHooks } from "./server/hooks";
 
 export interface IslxOptions {
   clientComponents?: {
@@ -43,11 +47,107 @@ export interface IslxOptions {
    * Same-site links move between pages without loading a new document: the runtime, its code
    * and the values the browser holds stay. Default true; false loads every page.
    */
-  navigation?: boolean;
+  navigation?: boolean | { viewTransition?: boolean };
+  /**
+   * Lifecycle hooks: callbacks, or the path of a module that exports them (`defineClientHooks`,
+   * `defineServerHooks`). Callbacks are copied into the browser or server build as source, so
+   * they may use only their arguments and globals (`window`, `fetch`, `console`, …); hooks that
+   * import app code go in a module.
+   */
+  hooks?: {
+    client?: string | ClientHooks;
+    server?: string | ServerHooks;
+  };
 }
 
 const RUNTIME_ID = "virtual:islx/runtime";
 const ENTRY_ID = "virtual:islx/client-entry";
+const CLIENT_HOOKS_ID = "virtual:islx/hooks-client";
+const SERVER_HOOKS_ID = "virtual:islx/hooks-server";
+
+// Globals a hook copied into the browser may use, besides the JavaScript ones Node also has.
+const BROWSER_GLOBALS = new Set([
+  "window",
+  "document",
+  "location",
+  "history",
+  "navigator",
+  "screen",
+  "localStorage",
+  "sessionStorage",
+  "alert",
+  "confirm",
+  "prompt",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+  "requestIdleCallback",
+  "cancelIdleCallback",
+  "IntersectionObserver",
+  "MutationObserver",
+  "ResizeObserver",
+  "HTMLElement",
+  "Element",
+  "Node",
+  "CustomEvent",
+  "Event",
+  "matchMedia",
+  "getComputedStyle",
+  "innerWidth",
+  "innerHeight",
+  "scrollX",
+  "scrollY",
+  "self",
+]);
+
+/**
+ * The source of a hooks module made from callbacks. Each callback is copied as written, so it
+ * must not use anything from where it was written: an outside variable, an import.
+ */
+export function serializeHooks(
+  hooks: Record<string, unknown>,
+  where: "client" | "server",
+  parse: (file: string, code: string) => AstNode,
+): string {
+  const entries: string[] = [];
+  for (const [name, value] of Object.entries(hooks)) {
+    if (value === undefined) continue;
+    if (typeof value !== "function")
+      throw new Error(`islx: hooks.${where}.${name} must be a function`);
+    const source = Function.prototype.toString.call(value);
+    if (source.includes("[native code]")) {
+      throw new Error(
+        `islx: hooks.${where}.${name} must be written in the config, not a built-in or bound function`,
+      );
+    }
+    // `navigated({ url }) {…}` (a method) is only valid inside an object literal.
+    const expression =
+      (parse("hook.js", `(${source});`) as AstNode & { errors: unknown[] }).errors.length === 0;
+    entries.push(expression ? `${JSON.stringify(name)}: ${source}` : source);
+  }
+  const code = `export default {\n${entries.join(",\n")}\n};\n`;
+  const program = parse("hooks.js", code);
+  const { globals } = analyze(program as never);
+  const outside = [...globals.keys()].filter((name) =>
+    where === "client"
+      ? !(name in globalThis) && !BROWSER_GLOBALS.has(name)
+      : // The server has no browser globals, whatever the process running the build has.
+        BROWSER_GLOBALS.has(name) || !(name in globalThis),
+  );
+  let imports = false;
+  walk(program as never, {
+    enter(node: { type: string }) {
+      if (node.type === "ImportExpression") imports = true;
+    },
+  });
+  if (outside.length > 0 || imports) {
+    const what = imports ? "`import()`" : outside.map((name) => `\`${name}\``).join(", ");
+    throw new Error(
+      `islx: hooks.${where} uses ${what}, which does not exist where the hook runs: hooks written in the config are copied into the ${where === "client" ? "browser" : "server"} build as source. ` +
+        `Use a global${where === "client" ? " (window.analytics)" : ""}, or put the hooks in a module and pass its path: hooks: { ${where}: "./src/islx.${where}.ts" }.`,
+    );
+  }
+  return code;
+}
 /** Stand for the browser entry's URL, and the files each client module needs, in the server
  * build until the browser build names them. */
 const ENTRY_PLACEHOLDER = "__islx_client_entry_url__";
@@ -57,17 +157,19 @@ const SCRIPT = /\.[cm]?[jt]sx?$/;
 type Parse = (file: string, code: string) => AstNode;
 
 async function createParser(): Promise<Parse> {
-  const vite = (await import("vite")) as {
-    parseSync?: (file: string, code: string) => { program: unknown };
-  };
+  type Parsed = { program: unknown; errors?: unknown[] };
+  // The program carries the parse errors, for callers that must not accept a broken source.
+  const withErrors = (result: Parsed) =>
+    Object.assign(result.program as AstNode, { errors: result.errors ?? [] });
+  const vite = (await import("vite")) as { parseSync?: (file: string, code: string) => Parsed };
   if (typeof vite.parseSync === "function") {
-    return (file, code) => vite.parseSync!(file, code).program as AstNode;
+    return (file, code) => withErrors(vite.parseSync!(file, code));
   }
   try {
     const oxc = (await import("oxc-parser" as string)) as {
-      parseSync(file: string, code: string): { program: unknown };
+      parseSync(file: string, code: string): Parsed;
     };
-    return (file, code) => oxc.parseSync(file, code).program as AstNode;
+    return (file, code) => withErrors(oxc.parseSync(file, code));
   } catch {
     throw new Error("@farmjs/islx/vite needs Vite 8, or oxc-parser installed with an older Vite");
   }
@@ -224,7 +326,14 @@ export function islx(options: IslxOptions = {}): Plugin[] {
       preamble = resolved.plugins.some((plugin) => plugin.name === "vite:react-virtual-preamble");
     },
     resolveId(id) {
-      if (id === RUNTIME_ID || id === ENTRY_ID) return `\0${id}`;
+      if (
+        id === RUNTIME_ID ||
+        id === ENTRY_ID ||
+        id === CLIENT_HOOKS_ID ||
+        id === SERVER_HOOKS_ID
+      ) {
+        return `\0${id}`;
+      }
       return undefined;
     },
     async load(id) {
@@ -233,9 +342,20 @@ export function islx(options: IslxOptions = {}): Plugin[] {
         const entry = isBuild() ? ENTRY_PLACEHOLDER : `${config.base}@id/__x00__${ENTRY_ID}`;
         const modules = isBuild() ? `JSON.parse(${JSON.stringify(MODULES_PLACEHOLDER)})` : "{}";
         return [
-          `import { setBuildDefaults } from "@farmjs/islx/server";`,
+          `import { setBuildDefaults, setServerHooks } from "@farmjs/islx/server";`,
+          `import hooks from ${JSON.stringify(SERVER_HOOKS_ID)};`,
           `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
+          `setServerHooks(hooks);`,
         ].join("\n");
+      }
+      if (id === `\0${CLIENT_HOOKS_ID}` || id === `\0${SERVER_HOOKS_ID}`) {
+        const where = id === `\0${CLIENT_HOOKS_ID}` ? "client" : "server";
+        const hooks = options.hooks?.[where];
+        if (hooks === undefined) return "export default undefined;";
+        if (typeof hooks === "string") {
+          return `export { default } from ${JSON.stringify(path.resolve(config.root, hooks))};`;
+        }
+        return serializeHooks(hooks as Record<string, unknown>, where, parse);
       }
       if (id === `\0${ENTRY_ID}`) {
         // In a build the server build has run: every client module it rendered gets a chunk.
@@ -254,14 +374,21 @@ export function islx(options: IslxOptions = {}): Plugin[] {
         return [
           ...(preamble && !isBuild() ? [`import "@vitejs/plugin-react/preamble";`] : []),
           `import { createHydrationRuntime, refreshDocument, swapDocument } from "@farmjs/islx/react/client";`,
-          `import { enhanceForms, setActionNavigator, startNavigation, navigate } from "@farmjs/islx/client";`,
+          `import { enhanceForms, setActionNavigator, setClientHooks, startNavigation, navigate } from "@farmjs/islx/client";`,
+          `import hooks from ${JSON.stringify(CLIENT_HOOKS_ID)};`,
+          `setClientHooks(hooks);`,
           load,
           `const runtime = createHydrationRuntime({ load });`,
           `setActionNavigator({ refresh: () => refreshDocument(runtime), navigate: (href) => navigate(href) });`,
           `enhanceForms();`,
           ...(options.navigation === false
             ? []
-            : [`startNavigation({ swap: (next) => swapDocument(runtime, next) });`]),
+            : [
+                `startNavigation({ swap: (next) => swapDocument(runtime, next), viewTransition: ${
+                  typeof options.navigation === "object" &&
+                  options.navigation.viewTransition === true
+                } });`,
+              ]),
           `runtime.hydrate(document);`,
           `export { runtime };`,
         ].join("\n");

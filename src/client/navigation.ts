@@ -8,11 +8,14 @@
  * failed response, or a page built by another deploy.
  */
 import { RENDER_HEADER } from "../protocol/wire";
+import { emit } from "./hooks";
 import { valueHeaders } from "./value-store";
 
 export interface NavigationOptions {
   /** Puts the fetched page in place of the current one. */
   swap(next: Document, url: URL): void | Promise<void>;
+  /** Animates the change with `document.startViewTransition`, where the browser has it. */
+  viewTransition?: boolean;
 }
 
 export interface NavigateOptions {
@@ -29,6 +32,8 @@ interface HistoryState {
 export const NAVIGATION_RENDER = "document";
 
 let started: { navigate(href: string, options?: NavigateOptions): Promise<void> } | null = null;
+/** Set by the click handler for the navigation it starts, so hooks see `kind: "link"`. */
+let clicking = false;
 
 /** The URL of the page's browser entry: a page from another deploy names another one. */
 function entryOf(document: Document): string | null {
@@ -81,6 +86,8 @@ export function startNavigation(options: NavigationOptions): {
 } {
   if (started) return started;
   let current: AbortController | null = null;
+  /** The page on screen: where a cancelled back or forward returns to. */
+  let here = new URL(location.href);
   history.scrollRestoration = "manual";
   rememberScroll();
 
@@ -89,6 +96,20 @@ export function startNavigation(options: NavigationOptions): {
     push: "push" | "replace" | "none",
     scroll: [number, number] | null,
   ): Promise<void> {
+    const kind =
+      push === "none"
+        ? "history"
+        : push === "push" && scroll === null && clicking
+          ? "link"
+          : "code";
+    clicking = false;
+    if (!emit("navigate", { url, from: here, kind })) {
+      // History has already moved: put the address back to the page that stays.
+      if (push === "none")
+        history.pushState({ islx: true, scroll: [window.scrollX, window.scrollY] }, "", here);
+      return;
+    }
+    const startedAt = performance.now();
     current?.abort();
     const controller = new AbortController();
     current = controller;
@@ -107,8 +128,12 @@ export function startNavigation(options: NavigationOptions): {
       finalUrl.hash = url.hash;
       next = new DOMParser().parseFromString(await response.text(), "text/html");
       if (entryOf(next) !== entryOf(document)) throw new Error("built by another deploy");
-    } catch {
+    } catch (error) {
       if (controller.signal.aborted) return;
+      emit("navigateError", {
+        url,
+        reason: error instanceof Error ? error.message : String(error),
+      });
       // Let the browser load it: it shows whatever the server answers.
       if (push === "none") location.reload();
       else location.assign(url.href);
@@ -122,13 +147,27 @@ export function startNavigation(options: NavigationOptions): {
     mergeStyles(next);
     document.title = next.title;
     (document.activeElement as HTMLElement | null)?.blur?.();
-    await options.swap(next, finalUrl);
+    const swap = () => options.swap(next, finalUrl);
+    const transition = (
+      document as Document & {
+        startViewTransition?: (update: () => Promise<void> | void) => {
+          updateCallbackDone: Promise<void>;
+        };
+      }
+    ).startViewTransition;
+    if (options.viewTransition && typeof transition === "function") {
+      await transition.call(document, swap).updateCallbackDone;
+    } else {
+      await swap();
+    }
+    here = new URL(location.href);
     if (scroll) window.scrollTo(scroll[0], scroll[1]);
     else if (finalUrl.hash)
       document.getElementById(decodeURIComponent(finalUrl.hash.slice(1)))?.scrollIntoView();
     else window.scrollTo(0, 0);
     announce(next.title || finalUrl.pathname);
     if (current === controller) current = null;
+    emit("navigated", { url: finalUrl, duration: performance.now() - startedAt });
   }
 
   document.addEventListener("click", (event) => {
@@ -144,6 +183,7 @@ export function startNavigation(options: NavigationOptions): {
     if (url.pathname === location.pathname && url.search === location.search && url.hash) return;
     event.preventDefault();
     rememberScroll();
+    clicking = true;
     void go(url, "push", null);
   });
 
