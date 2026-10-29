@@ -5,6 +5,8 @@ const example = "examples/react";
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
+  // One at a time: the development tests edit the example's source.
+  workers: 1,
   use: { channel: process.env.PLAYWRIGHT_CHANNEL || "chrome" },
   projects: [
     { name: "production", use: { baseURL: "http://localhost:4311" } },

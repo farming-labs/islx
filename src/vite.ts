@@ -37,8 +37,10 @@ export interface IslxOptions {
 
 const RUNTIME_ID = "virtual:islx/runtime";
 const ENTRY_ID = "virtual:islx/client-entry";
-/** Stands for the browser entry's URL in the server build until the browser build names it. */
+/** Stand for the browser entry's URL, and the files each client module needs, in the server
+ * build until the browser build names them. */
 const ENTRY_PLACEHOLDER = "__islx_client_entry_url__";
+const MODULES_PLACEHOLDER = "__islx_client_modules__";
 const SCRIPT = /\.[cm]?[jt]sx?$/;
 
 type Parse = (file: string, code: string) => AstNode;
@@ -111,6 +113,8 @@ export function islx(options: IslxOptions = {}): Plugin[] {
   const discovered = new Set<string>();
   /** The browser entry's URL, once the browser build named it. */
   let entryUrl: string | undefined;
+  /** The files each client module needs, once the browser build named them. */
+  const moduleFiles: Record<string, string[]> = {};
   // One key per build; every instance of the build shares it. A new one per dev server.
   const buildKey = randomBytes(32).toString("base64url");
 
@@ -143,6 +147,17 @@ export function islx(options: IslxOptions = {}): Plugin[] {
         builder: user.builder ?? {},
         environments: {
           client: {
+            // The browser entry is virtual, so Vite's scan cannot see what it imports: without
+            // these, the first page in development finds them late and reloads.
+            optimizeDeps: {
+              include: [
+                "react",
+                "react/jsx-runtime",
+                "react/jsx-dev-runtime",
+                "react-dom",
+                "react-dom/client",
+              ],
+            },
             build: {
               outDir: clientBuild?.outDir ?? "dist/client",
               rollupOptions: {
@@ -173,9 +188,10 @@ export function islx(options: IslxOptions = {}): Plugin[] {
       if (id === `\0${RUNTIME_ID}`) {
         // Imported by every server module with islands or actions.
         const entry = isBuild() ? ENTRY_PLACEHOLDER : `${config.base}@id/__x00__${ENTRY_ID}`;
+        const modules = isBuild() ? `JSON.parse(${JSON.stringify(MODULES_PLACEHOLDER)})` : "{}";
         return [
           `import { setBuildDefaults } from "@farmjs/islx/server";`,
-          `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)} });`,
+          `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
         ].join("\n");
       }
       if (id === `\0${ENTRY_ID}`) {
@@ -261,6 +277,19 @@ export function islx(options: IslxOptions = {}): Plugin[] {
     },
   };
 
+  const reload: Plugin = {
+    name: "islx:reload",
+    apply: "serve",
+    hotUpdate({ file, modules, server }) {
+      if (!isServer(this.environment.name) || modules.length === 0) return;
+      // A client module updates through the browser's own hot update. Anything else the server
+      // renders (a page, a server component, data) changes the HTML: load the page again.
+      const client = server.environments.client;
+      if (client?.moduleGraph.getModulesByFile(file)?.size) return;
+      client?.hot.send({ type: "full-reload" });
+    },
+  };
+
   const build: Plugin = {
     name: "islx:build",
     sharedDuringBuild: true,
@@ -276,23 +305,35 @@ export function islx(options: IslxOptions = {}): Plugin[] {
         const outDir = path.resolve(config.root, environment.config.build.outDir);
         for (const file of await listOutput(outDir)) {
           const source = await readFile(file, "utf8");
-          if (source.includes(ENTRY_PLACEHOLDER)) {
-            await writeFile(file, source.replaceAll(ENTRY_PLACEHOLDER, entryUrl));
-          }
+          if (!source.includes(ENTRY_PLACEHOLDER) && !source.includes(MODULES_PLACEHOLDER))
+            continue;
+          // The modules map sits in a JSON string literal: escape it as one.
+          const modules = JSON.stringify(JSON.stringify(moduleFiles)).slice(1, -1);
+          await writeFile(
+            file,
+            source.replaceAll(ENTRY_PLACEHOLDER, entryUrl).replaceAll(MODULES_PLACEHOLDER, modules),
+          );
         }
       }
     },
     generateBundle(_options, bundle) {
       if (this.environment.name !== "client") return;
+      const url = (fileName: string) => `${config.base}${fileName}`;
       for (const chunk of Object.values(bundle)) {
-        if (chunk.type === "chunk" && chunk.isEntry && chunk.facadeModuleId === `\0${ENTRY_ID}`) {
-          entryUrl = `${config.base}${chunk.fileName}`;
+        if (chunk.type !== "chunk" || !chunk.facadeModuleId) continue;
+        if (chunk.isEntry && chunk.facadeModuleId === `\0${ENTRY_ID}`) {
+          entryUrl = url(chunk.fileName);
+        } else if (chunk.isDynamicEntry && !chunk.facadeModuleId.startsWith("\0")) {
+          // A client module: its chunk, then what it imports (shared with the entry or not).
+          moduleFiles[relativeOf(chunk.facadeModuleId)] = [chunk.fileName, ...chunk.imports].map(
+            url,
+          );
         }
       }
     },
   };
 
-  return [main, build];
+  return [main, reload, build];
 }
 
 export default islx;
