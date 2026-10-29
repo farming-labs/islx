@@ -33,6 +33,11 @@ export interface IslxOptions {
   };
   /** The environments that render on the server. Default: every environment but `client`. */
   serverEnvironments?: string[];
+  /**
+   * Same-site links move between pages without loading a new document: the runtime, its code
+   * and the values the browser holds stay. Default true; false loads every page.
+   */
+  navigation?: boolean;
 }
 
 const RUNTIME_ID = "virtual:islx/runtime";
@@ -208,12 +213,15 @@ export function islx(options: IslxOptions = {}): Plugin[] {
           : `const load = (src) => import(/* @vite-ignore */ ${JSON.stringify(config.base)} + src);`;
         return [
           ...(preamble && !isBuild() ? [`import "@vitejs/plugin-react/preamble";`] : []),
-          `import { createHydrationRuntime, refreshDocument } from "@farmjs/islx/react/client";`,
-          `import { enhanceForms, setActionNavigator } from "@farmjs/islx/client";`,
+          `import { createHydrationRuntime, refreshDocument, swapDocument } from "@farmjs/islx/react/client";`,
+          `import { enhanceForms, setActionNavigator, startNavigation, navigate } from "@farmjs/islx/client";`,
           load,
           `const runtime = createHydrationRuntime({ load });`,
-          `setActionNavigator({ refresh: () => refreshDocument(runtime), navigate: (href) => location.assign(href) });`,
+          `setActionNavigator({ refresh: () => refreshDocument(runtime), navigate: (href) => navigate(href) });`,
           `enhanceForms();`,
+          ...(options.navigation === false
+            ? []
+            : [`startNavigation({ swap: (next) => swapDocument(runtime, next) });`]),
           `runtime.hydrate(document);`,
           `export { runtime };`,
         ].join("\n");

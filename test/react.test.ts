@@ -329,3 +329,19 @@ describe("actions in islands", () => {
     expect(document.querySelector("li")!.textContent).toBe("milk");
   });
 });
+
+describe("navigation renders", () => {
+  it("arrive whole: Suspense content inline, with no streaming scripts", async () => {
+    const { Suspense } = await import("react");
+    async function Slow() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return h("p", null, "late");
+    }
+    const page = h("div", null, h(Suspense, { fallback: h("p", null, "wait") }, h(Slow)));
+    const navigation = await html(page, {
+      request: new Request("https://app.test/", { headers: { "F-Render": "document" } }),
+    });
+    expect(navigation).toContain("<p>late</p>");
+    expect(navigation).not.toContain("wait");
+  });
+});

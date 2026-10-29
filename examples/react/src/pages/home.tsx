@@ -1,13 +1,22 @@
+import { Suspense } from "react";
 import { Counter, Typed } from "../components/counter";
 import { Later, OnClick } from "../components/later";
 import { Panel } from "../components/panel";
 import { Document } from "../document";
+
+async function Slow() {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  return <p data-testid="slow">streamed in</p>;
+}
 
 export default async function Home() {
   await new Promise((resolve) => setTimeout(resolve, 1));
   return (
     <Document title="islx">
       <h1>islx on Vite</h1>
+      <Suspense fallback={<p data-testid="slow">loading</p>}>
+        <Slow />
+      </Suspense>
       <Counter start={1} label="first" />
       <Counter start={10} label="second" />
       <Typed

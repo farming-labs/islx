@@ -121,6 +121,11 @@ export function Chart(props: { points: Map<string, number> }) { … }
   components the server build cannot see (chosen by name at runtime) or leaves some out.
 - Forms in server components submit without a reload once JavaScript runs, and post normally
   before.
+- Same-site links move between pages without loading a new document: the runtime, its code and
+  the values the browser holds stay, and the server leaves those values out. Back, forward,
+  scroll and focus behave as page loads do. `islx({ navigation: false })` turns it off;
+  `rel="external"` opts one link out; `navigate(href)` from `@farmjs/islx/client` navigates from
+  code.
 - Each build makes its own key for sealed action values; set `ISLX_ACTIONS_KEY` to keep forms
   working across deploys.
 
