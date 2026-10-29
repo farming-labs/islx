@@ -99,7 +99,13 @@ it read.
 
 ## Server actions
 
-An action id names one server function. Ids are opaque to the browser.
+An action id names one server function: a hash of its module's path from the app root and its
+export name (`inline:N` for the Nth inline action in the module). Ids are opaque to the browser.
+Every registered action is a public endpoint: anyone can call it with any arguments, so an
+action checks its inputs and the caller's rights like any other request handler.
+
+An action's **bound values** are the variables an inline action captured, then arguments added
+with `.bind` on the server. They travel sealed (below) and come before the call's own arguments.
 
 **Called from JavaScript:**
 
@@ -113,20 +119,45 @@ Content-Type: text/plain;charset=UTF-8
 
 A single `FormData` argument is sent as `multipart/form-data` instead, with the sealed values in
 the `$F_BOUND` field. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`.
+Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
+registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
+page after each one (a redirect navigates instead).
 
-**Posted by a form without JavaScript:** the form posts to the page, with the id in `$F_ACTION`
-and sealed values in `$F_BOUND`. The server runs the action and answers `303 See Other` to the
-page, or to the action's redirect.
+**Posted by a form without JavaScript:** React writes the fields while it renders the form, for
+`<form action>` and `<button formAction>`:
+
+```html
+<form action="" method="POST" enctype="multipart/form-data">
+  <input type="hidden" name="$F_REF_R_1_">
+  <input type="hidden" name="$F_R_1_:A" value="…action id…">
+  <input type="hidden" name="$F_R_1_:B" value="…sealed…">
+  <button name="$F_REF_R_2_">Delete</button>
+  <input type="hidden" name="$F_R_2_:A" value="…another action…">
+  …
+</form>
+```
+
+The last `$F_REF_` field a submission carries names the action, so a clicked button wins over
+its form. Every `$F_` field and `$ACTION_KEY` is removed before the action sees the form. The
+server answers `303 See Other` back to the page, or to the action's redirect. A form posted from
+a `useActionState` hook carries React's `$ACTION_KEY`; a server that can render the page renders
+it with React's form state `[result, $ACTION_KEY, id, bound count - 1]` instead of redirecting,
+and hydrates with the same.
 
 **Checks the server makes**, before running anything:
 
-- the method is `POST`, and the request is same-origin (`Origin`, then `Sec-Fetch-Site`), or from
-  an origin the app allows;
-- the body is within the size limit;
-- the id is registered; an unknown id is `404` with `F-Action-Stale: 1`, so the browser reloads
-  the page (it was rendered by another deploy);
-- arguments decode; malformed or unknown tags are `400`; arguments may not contain `r` or `s`;
-- sealed values open for this id (below).
+- the method is `POST`, and the request names a same-origin source (`Origin`, then `Referer`,
+  then `Sec-Fetch-Site: same-origin`), or one from an origin the app allows;
+- the body is within the size limit (`413`); a form over the limit that does not post an action
+  is left to the app;
+- the id is registered; an unknown id is `404` with `F-Action-Stale: 1` for calls, and a `303`
+  back to the page for forms, so the browser loads the page this deploy renders;
+- arguments decode; malformed or unknown tags are `400`;
+- sealed values open for this id: values sealed with a key the server does not have are stale
+  (`409`, `F-Action-Stale: 1`), anything else that does not open is `400`, and so is an inline
+  action that captured values posted without them.
+
+A failing action answers `500` with no details; the error is reported on the server.
 
 ## Sealed captured values
 
