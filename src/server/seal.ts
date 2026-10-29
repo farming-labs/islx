@@ -89,7 +89,7 @@ async function importKey(secret: string): Promise<CryptoKey> {
   const bytes = fromBase64url(secret.trim());
   if (!bytes || bytes.length !== KEY_BYTES) {
     throw new TypeError(
-      "an actions key must be 32 random bytes as base64url; create one with `npx furrow key`",
+      "an actions key must be 32 random bytes as base64url; create one with generateActionKey() from @farmjs/islx/server",
     );
   }
   return crypto.subtle.importKey("raw", bytes as BufferSource, "AES-GCM", false, [
@@ -132,7 +132,7 @@ export async function createActionKeys(
 }
 
 function additionalData(actionId: string): Uint8Array {
-  return new TextEncoder().encode(`furrow:action:${actionId}`);
+  return new TextEncoder().encode(`islx:action:${actionId}`);
 }
 
 export interface SealOptions extends Pick<EncodeOptions, "encodeFunction"> {

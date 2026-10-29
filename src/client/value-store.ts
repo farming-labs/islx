@@ -18,7 +18,7 @@ import {
 /** Past this many values the store starts over at the next navigation. */
 const MAX_STORED_VALUES = 1024;
 
-const STORE_KEY = Symbol.for("furrow.values");
+const STORE_KEY = Symbol.for("islx.values");
 
 export interface ValueStore {
   /** Reads the value scripts under `root` that the store does not hold yet. */
@@ -47,11 +47,11 @@ export function createValueStore(): ValueStore {
 
   const get = (key: string): unknown => {
     const entry = entries.get(key);
-    if (!entry) throw new Error(`furrow value ${key} was not found`);
+    if (!entry) throw new Error(`islx value ${key} was not found`);
     entries.delete(key);
     entries.set(key, entry);
     if (entry.state === "resolved") return entry.value;
-    if (entry.state === "resolving") throw new Error(`furrow value ${key} refers to itself`);
+    if (entry.state === "resolving") throw new Error(`islx value ${key} refers to itself`);
     entry.state = "resolving";
     try {
       entry.value = resolve(JSON.parse(entry.json));
@@ -118,7 +118,7 @@ export function createValueStore(): ValueStore {
   };
 }
 
-/** The page's value store, shared by every copy of furrow on the page. */
+/** The page's value store, shared by every copy of islx on the page. */
 export function getValueStore(): ValueStore {
   const scope = globalThis as typeof globalThis & Record<symbol, ValueStore | undefined>;
   return (scope[STORE_KEY] ??= createValueStore());

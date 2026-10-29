@@ -1,4 +1,4 @@
-/** furrow/client: the browser side. */
+/** islx/client: the browser side. */
 export {
   createValueStore,
   getValueStore,

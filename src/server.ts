@@ -1,4 +1,4 @@
-/** furrow/server: values sent once, and sealing an action's captured values. Server only. */
+/** islx/server: values sent once, and sealing an action's captured values. Server only. */
 export {
   VALUE_MIN_LENGTH,
   addressValues,

@@ -1,7 +1,7 @@
 /**
  * Values sent once: which parts of an island's props travel as values of their own, keyed by a
  * hash of their JSON, and which of those a response leaves out because the browser already holds
- * them. The browser side is `furrow/client` (`getValueStore`).
+ * them. The browser side is `@farmjs/islx/client` (`getValueStore`).
  */
 import { encodeLeaf, needsObjectTag } from "../protocol/codec";
 import {

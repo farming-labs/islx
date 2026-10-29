@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EncodeError, NOT_A_VALUE, decode, decodeTagged, encode, getTag } from "furrow";
+import { EncodeError, NOT_A_VALUE, decode, decodeTagged, encode, getTag } from "@farmjs/islx";
 
 // Every type JSON cannot hold, as a server component might pass them.
 export const sample = () => ({

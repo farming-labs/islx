@@ -1,6 +1,6 @@
 /**
- * furrow: the wire format. Names, tags and the typed-value codec, shared by the server
- * (`furrow/server`), the browser (`furrow/client`) and every adapter.
+ * islx: the wire format. Names, tags and the typed-value codec, shared by the server
+ * (`@farmjs/islx/server`), the browser (`@farmjs/islx/client`) and every adapter.
  */
 export * from "./protocol/wire";
 export {

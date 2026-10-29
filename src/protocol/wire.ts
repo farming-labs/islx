@@ -1,5 +1,5 @@
 /**
- * The names furrow writes into HTML, JSON and headers, and reads back. Elements, script types and
+ * The names islx writes into HTML, JSON and headers, and reads back. Elements, script types and
  * headers carry the `f` prefix; JSON uses one reserved key, `$`, whose value is a short tag. See
  * SPEC.md for the whole format.
  *

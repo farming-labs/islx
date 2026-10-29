@@ -5,7 +5,7 @@ import {
   generateActionKey,
   sealBound,
   unsealBound,
-} from "furrow/server";
+} from "@farmjs/islx/server";
 
 const key = generateActionKey();
 

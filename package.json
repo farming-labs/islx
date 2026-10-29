@@ -1,5 +1,5 @@
 {
-  "name": "furrow",
+  "name": "@farmjs/islx",
   "version": "0.0.0",
   "description": "A renderer-agnostic wire format for server-rendered islands: typed props, values sent once, server actions, and partial navigations.",
   "keywords": [
@@ -15,9 +15,9 @@
   "author": "Farming Labs",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/farming-labs/furrow.git"
+    "url": "git+https://github.com/farming-labs/islx.git"
   },
-  "homepage": "https://github.com/farming-labs/furrow#readme",
+  "homepage": "https://github.com/farming-labs/islx#readme",
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -60,5 +60,8 @@
     "typescript": "5.9.3",
     "vitest": "3.2.7"
   },
-  "packageManager": "pnpm@10.9.0"
+  "packageManager": "pnpm@10.9.0",
+  "publishConfig": {
+    "access": "public"
+  }
 }

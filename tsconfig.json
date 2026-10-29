@@ -12,8 +12,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
-      "furrow": ["./src/index.ts"],
-      "furrow/*": ["./src/*.ts"]
+      "@farmjs/islx": ["./src/index.ts"],
+      "@farmjs/islx/*": ["./src/*.ts"]
     }
   },
   "include": ["src", "test", "*.config.ts"]

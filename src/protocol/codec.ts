@@ -99,7 +99,7 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
 }
 
 /** Returned by `decodeTagged` for the runtime's reference tags (`r`, `s`, `a`). */
-export const NOT_A_VALUE: unique symbol = Symbol.for("furrow.codec.not-a-value");
+export const NOT_A_VALUE: unique symbol = Symbol.for("islx.codec.not-a-value");
 
 /** A plain object from entries; `defineProperty`, so a "__proto__" key stays an ordinary key. */
 export function plainObject(entries: Iterable<[string, unknown]>): Record<string, unknown> {

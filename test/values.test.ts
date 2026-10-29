@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { VALUES_HEADER, decode } from "furrow";
-import { createValueStore, getValueStore, valueHeaders } from "furrow/client";
+import { VALUES_HEADER, decode } from "@farmjs/islx";
+import { createValueStore, getValueStore, valueHeaders } from "@farmjs/islx/client";
 import {
   addressValues,
   escapeScriptJson,
   hashValue,
   parseHeldValues,
   selectValuesToSend,
-} from "furrow/server";
+} from "@farmjs/islx/server";
 
 // A docs navigation tree: what a layout passes to its sidebar and its mobile menu.
 const tree = Array.from({ length: 6 }, (_, section) => ({

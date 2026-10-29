@@ -1,13 +1,13 @@
-# furrow wire format
+# islx wire format
 
-Version 1. This document is the contract between a furrow server and a furrow browser runtime.
-Anything that writes and reads it, in any language or framework, is a furrow implementation.
+Version 1. This document is the contract between a islx server and a islx browser runtime.
+Anything that writes and reads it, in any language or framework, is a islx implementation.
 
 ## Principles
 
 - **HTML first.** A page is ordinary server HTML. Interactive parts are marked where they sit;
   nothing else is reserved.
-- **One prefix.** Every element, script type and header furrow owns starts with `f`. Custom
+- **One prefix.** Every element, script type and header islx owns starts with `f`. Custom
   elements need a hyphen (`f-island`), script types use a slash (`f/props`), headers start `F-`.
 - **One reserved JSON key.** Inside JSON, `$` holds a short tag. App data that has its own `$`
   key is wrapped, so no key is off limits to apps.
@@ -138,7 +138,7 @@ sealed = base64url( version ‖ key id ‖ IV ‖ AES-256-GCM(ciphertext ‖ tag
 ```
 
 - `version` is `1`; `key id` is the first byte of SHA-256 of the key; the IV is 12 random bytes;
-- the additional data is `furrow:action:<id>`, so values sealed for one action never open for
+- the additional data is `islx:action:<id>`, so values sealed for one action never open for
   another;
 - the plaintext is the captured values as a tagged JSON array.
 
@@ -148,17 +148,17 @@ key rotation keep working. Every server instance must share the keys.
 
 ## Integration model
 
-furrow is layered so each framework needs only a thin integration:
+islx is layered so each framework needs only a thin integration:
 
 | Layer | Package entry | Depends on |
 | --- | --- | --- |
-| Wire format and codec | `furrow` | nothing (Web APIs) |
-| Server: values, sealing, action handling | `furrow/server` | `furrow` |
-| Browser: value store, hydration, navigation | `furrow/client` | `furrow` |
-| Renderer adapters | `furrow/react` (then Preact, Vue, Svelte, Solid) | the renderer |
-| Compiler: `"use client"`, `"use server"`, inline actions | `furrow/compiler` | a parser |
-| Bundler plugins | `furrow/vite`, `furrow/webpack`, `furrow/rollup`, `furrow/esbuild` | the compiler |
-| Frameworks | `furrow/next`, `furrow/astro`, `furrow/nuxt`, … | the above |
+| Wire format and codec | `@farmjs/islx` | nothing (Web APIs) |
+| Server: values, sealing, action handling | `@farmjs/islx/server` | `@farmjs/islx` |
+| Browser: value store, hydration, navigation | `@farmjs/islx/client` | `@farmjs/islx` |
+| Renderer adapters | `@farmjs/islx/react` (then Preact, Vue, Svelte, Solid) | the renderer |
+| Compiler: `"use client"`, `"use server"`, inline actions | `@farmjs/islx/compiler` | a parser |
+| Bundler plugins | `@farmjs/islx/vite`, `@farmjs/islx/webpack`, `@farmjs/islx/rollup`, `@farmjs/islx/esbuild` | the compiler |
+| Frameworks | `@farmjs/islx/next`, `@farmjs/islx/astro`, `@farmjs/islx/nuxt`, … | the above |
 
 - **Request handling** is one function on Web `Request` and `Response`, so any server mounts it:
   a Next.js route handler or middleware, a Nitro event handler, Astro middleware, Hono, Express
@@ -166,5 +166,5 @@ furrow is layered so each framework needs only a thin integration:
 - **The compiler** is a pure function from source and environment (`server` or `client`) to
   source, with no bundler in it. Each bundler plugin is a few lines around it, and Turbopack uses
   the webpack loader.
-- **Conformance.** `furrow/testing` will ship the contract suite: an implementation passes when its
+- **Conformance.** `@farmjs/islx/testing` will ship the contract suite: an implementation passes when its
   fixture app passes it, in development and production.
