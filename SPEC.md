@@ -93,6 +93,13 @@ must never enter a shared cache (CDN, ISR entry, PPR shell), and a cacheable res
 | `F-Values` | value keys the browser holds |
 | `F-Layouts` | the layouts on screen, as a JSON array of layout keys (pattern with params filled in) |
 | `F-Render: tree` | the browser can rebuild the page from its server tree; HTML may be left out |
+| `F-Render: document` | a navigation: the browser puts the whole page in place with DOM methods, so the server sends it in one piece (every Suspense boundary resolved, no streaming scripts) |
+
+Without a framework router, the browser runtime navigates itself: a same-site link click fetches
+the page with `F-Render: document` and `F-Values`, swaps the body in, starts the next page's
+islands, and handles history, scroll and focus. Anything unusual loads the page normally (another
+site, `target`, `download`, `rel="external"`, modifier keys, a non-HTML answer, or a page whose
+browser entry differs, as after a deploy).
 
 A server that leaves layouts out renders each kept layout as an empty boundary, and the browser
 keeps its own. If the response does not fit what is on screen, the browser loads the full

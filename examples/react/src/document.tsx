@@ -10,7 +10,10 @@ export function Document({ title, children }: { title: string; children: ReactNo
       </head>
       <body>
         <nav>
-          <a href="/">Home</a> <a href="/todos">Todos</a>
+          <a href="/">Home</a> <a href="/todos">Todos</a>{" "}
+          <a href="/todos" rel="external" data-testid="external">
+            Todos (full load)
+          </a>
         </nav>
         <main>{children}</main>
       </body>

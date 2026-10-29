@@ -8,4 +8,4 @@ export {
   type IslandStrategy,
   type ScheduleOptions,
 } from "../client/schedule";
-export { refreshDocument } from "./document";
+export { refreshDocument, swapDocument } from "./document";

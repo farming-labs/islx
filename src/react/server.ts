@@ -5,7 +5,7 @@
 import * as React from "react";
 import { renderToReadableStream, type RenderToReadableStreamOptions } from "react-dom/server";
 import { encode } from "../protocol/codec";
-import { FORM_STATE_SCRIPT_TYPE } from "../protocol/wire";
+import { FORM_STATE_SCRIPT_TYPE, RENDER_HEADER } from "../protocol/wire";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
 import type { ReactFormState } from "../server/handle";
@@ -72,8 +72,12 @@ function FormStateScript({ formState }: { formState: ReactFormState }) {
 /**
  * Renders a page whose client components are islands. A response rendered with a `request` whose
  * browser holds values is that browser's alone: send it `private` and never share it.
+ *
+ * A navigation (`F-Render` on the request) gets the whole page in one piece: the browser puts it
+ * in place with DOM methods, which run no scripts, so the page cannot stream in with React's
+ * inline scripts. Every Suspense boundary has resolved before the first byte.
  */
-export function renderToStream(
+export async function renderToStream(
   element: React.ReactNode,
   { request, formState, bootstrap = true, ...options }: RenderToStreamOptions = {},
 ): Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }> {
@@ -89,11 +93,13 @@ export function renderToStream(
   const bootstrapModules = entry
     ? [...(options.bootstrapModules ?? []), entry]
     : options.bootstrapModules;
-  return renderToReadableStream(tree, {
+  const stream = await renderToReadableStream(tree, {
     ...options,
     bootstrapModules,
     formState: formState as never,
   });
+  if (request?.headers.has(RENDER_HEADER)) await stream.allReady;
+  return stream;
 }
 
 /** Whether a response rendered for `request` leaves out values its browser holds. */

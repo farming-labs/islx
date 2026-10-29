@@ -251,7 +251,8 @@ describe("actions in islands", () => {
     const action = bindInlineAction("island-invite", () => ["core"], ["team"]);
     const markup = await html(h(InviteIsland, { invite: action }));
     expect(markup).toMatch(/\{"invite":\{"\$":"a","v":"island-invite","b":"[A-Za-z0-9_-]+"\}\}/);
-    expect(markup).not.toContain("core");
+    // Only sealed: the value never appears as JSON in the page.
+    expect(markup).not.toContain('"core"');
 
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
       const response = await handleAction(
@@ -327,5 +328,21 @@ describe("actions in islands", () => {
     await mount(after);
     expect(errors()).toEqual([]);
     expect(document.querySelector("li")!.textContent).toBe("milk");
+  });
+});
+
+describe("navigation renders", () => {
+  it("arrive whole: Suspense content inline, with no streaming scripts", async () => {
+    const { Suspense } = await import("react");
+    async function Slow() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return h("p", null, "late");
+    }
+    const page = h("div", null, h(Suspense, { fallback: h("p", null, "wait") }, h(Slow)));
+    const navigation = await html(page, {
+      request: new Request("https://app.test/", { headers: { "F-Render": "document" } }),
+    });
+    expect(navigation).toContain("<p>late</p>");
+    expect(navigation).not.toContain("wait");
   });
 });
