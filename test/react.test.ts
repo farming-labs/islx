@@ -251,7 +251,8 @@ describe("actions in islands", () => {
     const action = bindInlineAction("island-invite", () => ["core"], ["team"]);
     const markup = await html(h(InviteIsland, { invite: action }));
     expect(markup).toMatch(/\{"invite":\{"\$":"a","v":"island-invite","b":"[A-Za-z0-9_-]+"\}\}/);
-    expect(markup).not.toContain("core");
+    // Only sealed: the value never appears as JSON in the page.
+    expect(markup).not.toContain('"core"');
 
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
       const response = await handleAction(

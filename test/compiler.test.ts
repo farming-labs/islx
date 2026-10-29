@@ -184,7 +184,7 @@ export function Page(user, settings) {
     const reference = getActionReference(save)!;
     await reference.ready();
     const sealed = reference.sealed()!;
-    expect(sealed).not.toContain("dark");
+    expect(Buffer.from(sealed, "base64url").toString("latin1")).not.toContain('"dark"');
     const response = await post(reference.id, { a: [2], b: sealed });
     expect(response!.status).toBe(200);
     const { result } = (await response!.json()) as any;
@@ -225,7 +225,9 @@ export function Page(secret) {
     const outer = module.Page("s3cret");
     const reference = getActionReference(outer)!;
     await reference.ready();
-    expect(reference.sealed()).not.toContain("s3cret");
+    expect(Buffer.from(reference.sealed()!, "base64url").toString("latin1")).not.toContain(
+      "s3cret",
+    );
     const response = await post(reference.id, { a: [], b: reference.sealed() });
     expect(await response!.json()).toEqual({ result: "s3cret:from outer" });
   });

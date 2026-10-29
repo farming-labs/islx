@@ -28,7 +28,8 @@ describe("sealed captured values", () => {
     };
     const sealed = await sealBound(keys, "page#inline:0", [user, 7n]);
     expect(sealed).toMatch(/^[A-Za-z0-9_-]+$/);
-    expect(sealed).not.toContain("42");
+    // Encrypted: the bytes do not hold the values (a random string may hold any two characters).
+    expect(Buffer.from(sealed, "base64url").toString("latin1")).not.toContain('"id":42');
     expect(await unsealBound(keys, "page#inline:0", sealed)).toEqual([user, 7n]);
   });
 
