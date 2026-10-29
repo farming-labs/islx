@@ -17,6 +17,7 @@ import {
   TAG_VALUE,
   formFieldName,
 } from "../protocol/wire";
+import { getBuildDefaults } from "./build";
 import {
   type ActionKeys,
   SealError,
@@ -82,9 +83,9 @@ let warnedGeneratedKey = false;
 /**
  * Sets the keys bound values are sealed with: `key` seals, `previousKeys` still open values
  * sealed before a rotation. Without it, `ISLX_ACTIONS_KEY` and `ISLX_ACTIONS_PREVIOUS_KEYS`
- * (comma-separated) are read from the environment, and failing those a key is generated for this
- * process: fine for one long-lived server, wrong for several instances or serverless, where
- * every server must hold the same key.
+ * (comma-separated) are read from the environment; failing those, the key the bundler plugin
+ * made for this build; failing that, a key generated for this process: fine for one long-lived
+ * server, wrong for several instances or serverless, where every server must hold the same key.
  */
 export function configureActionKeys(options: {
   key: string;
@@ -103,6 +104,9 @@ function actionKeys(): Promise<ActionKeys> {
     const previous = (env?.ISLX_ACTIONS_PREVIOUS_KEYS ?? "").split(",").filter(Boolean);
     return (scope[KEYS_KEY] = createActionKeys(key, previous));
   }
+  // A key the bundler plugin made for this build: shared by every instance of the build.
+  const buildKey = getBuildDefaults().key;
+  if (buildKey) return (scope[KEYS_KEY] = createActionKeys(buildKey));
   if (!warnedGeneratedKey && env?.NODE_ENV === "production") {
     warnedGeneratedKey = true;
     console.warn(

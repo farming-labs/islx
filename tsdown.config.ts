@@ -9,6 +9,7 @@ export default defineConfig({
     react: "src/react.ts",
     "react/server": "src/react/server.ts",
     "react/client": "src/react/client.ts",
+    vite: "src/vite.ts",
   },
   format: "esm",
   platform: "neutral",
@@ -16,7 +17,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: true,
-  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//],
+  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@farmjs\/islx/],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
   },

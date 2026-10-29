@@ -41,6 +41,16 @@ export const SLOT_TAG = "s";
 export const ACTION_TAG = "a";
 /** `{"$":"o","v":{…}}`: app data that has its own `$` key. */
 export const OBJECT_TAG = "o";
+/** `{"$":"F","v":n}`: a `FormData` argument, sent as fields of a multipart call. */
+export const FORM_DATA_TAG = "F";
+/** `{"$":"K","v":n}`: a `Blob` or `File` argument, sent as a field of a multipart call. */
+export const BLOB_TAG = "K";
+/** The multipart field of a call's JSON (`{"a":…,"b":…}`) when it carries form data or files. */
+export const CALL_FIELD = "$F_CALL";
+/** The multipart field name of attachment `n`, or of field `key` of `FormData` attachment `n`. */
+export function attachmentField(index: number, key?: string): string {
+  return key === undefined ? `$F_${index}` : `$F_${index}_${key}`;
+}
 
 /** Request header: the value keys the browser holds. */
 export const VALUES_HEADER = "F-Values";
@@ -70,6 +80,30 @@ export function formFieldName(prefix: string, field: "A" | "B"): string {
 }
 /** Every form field the runtime owns starts with this, and is removed before an action runs. */
 export const FORM_FIELD_PREFIX = "$F_";
+
+/**
+ * The action a form submission posts: the last `$F_REF_` field names it, so a clicked button
+ * wins over its form. Null for a form that posts no action.
+ */
+export function readPostedAction(form: FormData): { id: string; token?: string } | null {
+  let prefix: string | null = null;
+  for (const key of form.keys()) {
+    if (key.startsWith(FORM_REF_PREFIX)) prefix = key.slice(FORM_REF_PREFIX.length);
+  }
+  if (prefix === null) return null;
+  const id = form.get(formFieldName(prefix, "A"));
+  const token = form.get(formFieldName(prefix, "B"));
+  if (typeof id !== "string") return null;
+  return { id, token: typeof token === "string" ? token : undefined };
+}
+
+/** Removes the runtime's fields, so the action sees only the form's own. */
+export function stripRuntimeFields(form: FormData): void {
+  // A snapshot of the keys: deleting while iterating the form itself skips entries.
+  for (const key of new Set(form.keys())) {
+    if (key.startsWith(FORM_FIELD_PREFIX) || key === ACTION_KEY_FIELD) form.delete(key);
+  }
+}
 /** React's field naming which `useActionState` hook a form posted from. */
 export const ACTION_KEY_FIELD = "$ACTION_KEY";
 /** A `FormData` argument's field for its action's sealed values, in calls from JavaScript. */

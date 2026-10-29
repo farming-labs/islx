@@ -129,3 +129,49 @@ describe("client references", () => {
     expect(JSON.parse(sent[0]!.body as string).a).toEqual([{ $: "a", v: "inner", b: "tok" }]);
   });
 });
+
+describe("arguments with form data and files", () => {
+  it("send them as multipart fields named in the JSON", async () => {
+    const sent = mockFetch(() => json({ result: null }));
+    const form = new FormData();
+    form.append("by", "2");
+    const file = new Blob(["hello"], { type: "text/plain" });
+    await createServerReference("vote", "tok")({ votes: 1 }, form, file);
+    const body = sent[0]!.body as FormData;
+    expect(JSON.parse(body.get("$F_CALL") as string)).toEqual({
+      a: [{ votes: 1 }, { $: "F", v: 0 }, { $: "K", v: 1 }],
+      b: "tok",
+    });
+    expect(body.get("$F_0_by")).toBe("2");
+    expect(body.get("$F_1")).toBeInstanceOf(Blob);
+  });
+});
+
+describe("server-component forms", () => {
+  it("submit as a call once JavaScript runs, without the runtime's fields", async () => {
+    const { enhanceForms } = await import("@farmjs/islx/client");
+    const sent = mockFetch(() => json({ result: null }));
+    enhanceForms();
+    document.body.innerHTML = `<form action="" method="POST">
+      <input type="hidden" name="$F_REF_R_1_"><input type="hidden" name="$F_R_1_:A" value="add">
+      <input type="hidden" name="$F_R_1_:B" value="tok"><input name="title" value="milk"><button>Add</button></form>`;
+    const form = document.querySelector("form")!;
+    const event = new Event("submit", { bubbles: true, cancelable: true });
+    form.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.headers["F-Action"]).toBe("add");
+    const body = sent[0]!.body as FormData;
+    expect([...body.keys()]).toEqual(["title", "$F_BOUND"]);
+    expect(body.get("$F_BOUND")).toBe("tok");
+  });
+
+  it("leave forms that post no action to the browser", async () => {
+    const { enhanceForms } = await import("@farmjs/islx/client");
+    enhanceForms();
+    document.body.innerHTML = `<form action="/search"><input name="q"></form>`;
+    const event = new Event("submit", { bubbles: true, cancelable: true });
+    document.querySelector("form")!.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+});

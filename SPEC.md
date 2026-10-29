@@ -28,7 +28,7 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 
 | Name | Meaning |
 | --- | --- |
-| `<f-island>` | A client component's server HTML. `src` is the module the browser imports, `export` the component's export name, `props` the id of its props script, `strategy` when it hydrates (`load`, `idle`, `visible`, `media`, `only`). |
+| `<f-island>` | A client component's server HTML. `src` names the module the browser imports (its path from the app root; the runtime maps it to a URL), `export` the component's export name, `props` the id of its props script, `strategy` when it hydrates: `load`, `idle`, `visible` or `interaction`. A hydrated island gets a `hydrated` attribute. |
 | `<script type="f/props" for>` | An island's props, as JSON. `for` names the island's `props` id. |
 | `<script type="f/value" name>` | A value sent once. `name` is its key. Written before the first island that uses it. |
 | `<f-slot name>` | Server output passed to an island as children. It stays server HTML; the island renders it in place. |
@@ -59,6 +59,8 @@ with any other keys is data.
 | `R` | `RegExp` | `[source, flags]` |
 | `Y` | bytes | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name |
 | `p` | a Suspense boundary inside a server tree | |
+| `F` | a `FormData` action argument | its index among the call's attachments |
+| `K` | a `Blob` or `File` action argument | its index among the call's attachments |
 
 The browser resolves `r` first (from its value store), then decodes the rest. Inside `o`, only
 the object's properties are read; the object itself is never a tag. Unknown tags are errors.
@@ -118,7 +120,10 @@ Content-Type: text/plain;charset=UTF-8
 ```
 
 A single `FormData` argument is sent as `multipart/form-data` instead, with the sealed values in
-the `$F_BOUND` field. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`.
+the `$F_BOUND` field. Arguments that hold `FormData` or files anywhere (as `useActionState`'s
+`(previousState, formData)`) are sent as multipart too: the JSON goes in the `$F_CALL` field,
+attachment `n` is `{"$":"F","v":n}` or `{"$":"K","v":n}` in it, a file travels as field `$F_n`
+and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`.
 Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
 registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
 page after each one (a redirect navigates instead).
@@ -158,6 +163,13 @@ and hydrates with the same.
   action that captured values posted without them.
 
 A failing action answers `500` with no details; the error is reported on the server.
+
+**Forms in server components** belong to no island. Once the browser runtime runs, a submit of a
+form that posts an action is sent as a call (same fields, same checks) and the page refreshes,
+keeping island state; without JavaScript it posts as above.
+
+**Form state after a post.** A page rendered with React's form state carries it for hydration:
+`<script type="f/form-state">…tagged JSON…</script>`. Every island root hydrates with it.
 
 ## Sealed captured values
 

@@ -11,3 +11,4 @@ export {
   setActionNavigator,
   type ActionNavigator,
 } from "./client/actions";
+export { enhanceForms } from "./client/forms";

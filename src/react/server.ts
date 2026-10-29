@@ -7,6 +7,7 @@ import { renderToReadableStream, type RenderToReadableStreamOptions } from "reac
 import { encode } from "../protocol/codec";
 import { FORM_STATE_SCRIPT_TYPE } from "../protocol/wire";
 import { encodeActionReference } from "../server/actions";
+import { getBuildDefaults } from "../server/build";
 import type { ReactFormState } from "../server/handle";
 import {
   addressValues,
@@ -53,6 +54,11 @@ export interface RenderToStreamOptions extends Omit<RenderToReadableStreamOption
    * hydrate.
    */
   formState?: ReactFormState | null;
+  /**
+   * Adds the browser entry that hydrates islands (from the bundler plugin) to the page. Default
+   * true; a framework that adds its own scripts turns it off.
+   */
+  bootstrap?: boolean;
 }
 
 /** The script carrying a form post's state to the browser, for `hydrateRoot`. */
@@ -69,7 +75,7 @@ function FormStateScript({ formState }: { formState: ReactFormState }) {
  */
 export function renderToStream(
   element: React.ReactNode,
-  { request, formState, ...options }: RenderToStreamOptions = {},
+  { request, formState, bootstrap = true, ...options }: RenderToStreamOptions = {},
 ): Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }> {
   const held = request ? parseHeldValues(request) : null;
   const { render } = getContexts();
@@ -79,7 +85,15 @@ export function renderToStream(
     element,
     formState ? React.createElement(FormStateScript, { formState }) : null,
   );
-  return renderToReadableStream(tree, { ...options, formState: formState as never });
+  const entry = bootstrap ? getBuildDefaults().entry : undefined;
+  const bootstrapModules = entry
+    ? [...(options.bootstrapModules ?? []), entry]
+    : options.bootstrapModules;
+  return renderToReadableStream(tree, {
+    ...options,
+    bootstrapModules,
+    formState: formState as never,
+  });
 }
 
 /** Whether a response rendered for `request` leaves out values its browser holds. */
