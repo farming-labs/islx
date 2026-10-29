@@ -6,6 +6,9 @@ export default defineConfig({
     client: "src/client.ts",
     server: "src/server.ts",
     compiler: "src/compiler.ts",
+    react: "src/react.ts",
+    "react/server": "src/react/server.ts",
+    "react/client": "src/react/client.ts",
   },
   format: "esm",
   platform: "neutral",
@@ -13,7 +16,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: true,
-  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic"],
+  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
   },
