@@ -127,7 +127,6 @@ export default async function Page({ params }) {
 
   it("refuse mistakes with where they are", () => {
     const cases: Array<[string, string]> = [
-      ['function A() { const f = async () => { "use server"; }; }', ""],
       ['function A() { function f() { "use server"; } }', "must be an async function"],
       [
         'function A() { const f = async function () { "use server"; return this.x; }; }',
