@@ -10,7 +10,7 @@ import {
   registerInlineAction,
   registerServerReference,
   type HandleActionOptions,
-} from "@farmjs/islx/server";
+} from "@farm.js/islx/server";
 
 const ORIGIN = "https://app.test";
 

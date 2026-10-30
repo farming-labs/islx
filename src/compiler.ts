@@ -1,4 +1,4 @@
-/** @farmjs/islx/compiler: source transforms for bundler plugins. Runs in Node. */
+/** @farm.js/islx/compiler: source transforms for bundler plugins. Runs in Node. */
 export {
   ActionCompileError,
   getActionId,

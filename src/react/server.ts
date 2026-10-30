@@ -1,5 +1,5 @@
 /**
- * @farmjs/islx/react/server: rendering a React page with islands. Importing it gives islands the
+ * @farm.js/islx/react/server: rendering a React page with islands. Importing it gives islands the
  * server code they need (values, action references); `renderToStream` renders a page.
  */
 import * as React from "react";

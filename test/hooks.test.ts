@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { parseSync } from "oxc-parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { defineClientHooks, hookEventName, setClientHooks } from "@farmjs/islx/client";
+import { defineClientHooks, hookEventName, setClientHooks } from "@farm.js/islx/client";
 import { emit } from "../src/client/hooks";
 import {
   configureActionKeys,
@@ -10,8 +10,8 @@ import {
   handleAction,
   registerServerReference,
   setServerHooks,
-} from "@farmjs/islx/server";
-import { serializeHooks } from "@farmjs/islx/vite";
+} from "@farm.js/islx/server";
+import { serializeHooks } from "@farm.js/islx/vite";
 
 const parse = (file: string, code: string) => {
   const result = parseSync(file, code);

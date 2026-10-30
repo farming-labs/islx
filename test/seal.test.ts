@@ -5,7 +5,7 @@ import {
   generateActionKey,
   sealBound,
   unsealBound,
-} from "@farmjs/islx/server";
+} from "@farm.js/islx/server";
 
 const key = generateActionKey();
 

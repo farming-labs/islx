@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement as h, useActionState, useState, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createIsland } from "@farmjs/islx/react";
-import { createHydrationRuntime, scheduleHydration } from "@farmjs/islx/react/client";
-import { renderToStream } from "@farmjs/islx/react/server";
-import { getValueStore } from "@farmjs/islx/client";
+import { createIsland } from "@farm.js/islx/react";
+import { createHydrationRuntime, scheduleHydration } from "@farm.js/islx/react/client";
+import { renderToStream } from "@farm.js/islx/react/server";
+import { getValueStore } from "@farm.js/islx/client";
 import {
   configureActionKeys,
   generateActionKey,
@@ -12,7 +12,7 @@ import {
   registerInlineAction,
   registerServerReference,
   bindInlineAction,
-} from "@farmjs/islx/server";
+} from "@farm.js/islx/server";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 beforeAll(() => configureActionKeys({ key: generateActionKey() }));

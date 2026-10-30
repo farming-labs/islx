@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { startNavigation } from "@farmjs/islx/client";
+import { startNavigation } from "@farm.js/islx/client";
 
 const page = (title: string, entry = "/assets/entry.js") =>
   `<!doctype html><html><head><title>${title}</title></head><body><h1>${title}</h1><script type="module" src="${entry}" async=""></script></body></html>`;

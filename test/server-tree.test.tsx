@@ -3,16 +3,16 @@ import React, { act, createContext, use, useContext, useId, useState, type React
 import { hydrateRoot } from "react-dom/client";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getValueStore } from "@farmjs/islx/client";
-import { createIsland } from "@farmjs/islx/react";
+import { getValueStore } from "@farm.js/islx/client";
+import { createIsland } from "@farm.js/islx/react";
 import {
   createHydrationRuntime,
   createServerHtml,
   createServerTreeElement,
   withinClientRoot,
-} from "@farmjs/islx/react/client";
-import { parseHeldValues } from "@farmjs/islx/server";
-import { renderServerTree } from "@farmjs/islx/react/server";
+} from "@farm.js/islx/react/client";
+import { parseHeldValues } from "@farm.js/islx/server";
+import { renderServerTree } from "@farm.js/islx/react/server";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

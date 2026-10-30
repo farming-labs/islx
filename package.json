@@ -1,6 +1,6 @@
 {
-  "name": "@farmjs/islx",
-  "version": "0.0.0",
+  "name": "@farm.js/islx",
+  "version": "0.0.1",
   "description": "A renderer-agnostic wire format for server-rendered islands: typed props, values sent once, server actions, and partial navigations.",
   "keywords": [
     "islands",
@@ -27,7 +27,8 @@
   },
   "files": [
     "dist",
-    "SPEC.md"
+    "SPEC.md",
+    "CHANGELOG.md"
   ],
   "exports": {
     ".": {
@@ -72,7 +73,8 @@
     "format": "oxfmt src test",
     "format:check": "oxfmt --check src test",
     "prepublishOnly": "pnpm build",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "release:check": "pnpm build && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && npm pack --dry-run"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

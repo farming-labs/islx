@@ -1,4 +1,4 @@
-/** @farmjs/islx/client: the browser side. */
+/** @farm.js/islx/client: the browser side. */
 export {
   createValueStore,
   getValueStore,

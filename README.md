@@ -13,16 +13,21 @@ islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mod
 replaces React Server Components' Flight payload. On a 300-page docs app it ships 26% less
 JavaScript, and a client navigation sends 2.5 KB instead of 12 KB.
 
-> Status: early. The wire format and the server core are here; renderer adapters, the compiler
-> and framework integrations follow. See [SPEC.md](./SPEC.md).
+> Status: 0.0.1, the first release. React and Vite are supported; other renderers and framework
+> integrations follow. The wire format is in [SPEC.md](./SPEC.md), changes in
+> [CHANGELOG.md](./CHANGELOG.md).
+
+```bash
+npm install @farm.js/islx
+```
 
 ## What is here
 
 ```ts
-import { encode, decode } from "@farmjs/islx";
-import { addressValues, selectValuesToSend, handleAction } from "@farmjs/islx/server";
-import { getValueStore, createServerReference, setActionNavigator } from "@farmjs/islx/client";
-import { transformActions } from "@farmjs/islx/compiler";
+import { encode, decode } from "@farm.js/islx";
+import { addressValues, selectValuesToSend, handleAction } from "@farm.js/islx/server";
+import { getValueStore, createServerReference, setActionNavigator } from "@farm.js/islx/client";
+import { transformActions } from "@farm.js/islx/compiler";
 ```
 
 - **Typed values.** `Date`, `Map`, `Set`, `BigInt`, `URL`, `RegExp`, bytes, `undefined` and
@@ -79,7 +84,7 @@ rotated-out key in `ISLX_ACTIONS_PREVIOUS_KEYS` so open pages keep working.
 ```ts
 // vite.config.ts
 import react from "@vitejs/plugin-react";
-import { islx } from "@farmjs/islx/vite";
+import { islx } from "@farm.js/islx/vite";
 
 export default defineConfig({
   plugins: [react(), islx()],
@@ -91,8 +96,8 @@ export default defineConfig({
 
 ```tsx
 // src/entry-server.tsx
-import { renderToStream } from "@farmjs/islx/react/server";
-import { handleAction } from "@farmjs/islx/server";
+import { renderToStream } from "@farm.js/islx/react/server";
+import { handleAction } from "@farm.js/islx/server";
 
 export async function handle(request: Request) {
   const action = await handleAction(request, {
@@ -124,7 +129,7 @@ export function Chart(props: { points: Map<string, number> }) { … }
 - Same-site links move between pages without loading a new document: the runtime, its code and
   the values the browser holds stay, and the server leaves those values out. Back, forward,
   scroll and focus behave as page loads do. `islx({ navigation: false })` turns it off;
-  `rel="external"` opts one link out; `navigate(href)` from `@farmjs/islx/client` navigates from
+  `rel="external"` opts one link out; `navigate(href)` from `@farm.js/islx/client` navigates from
   code.
 - `islx({ directives: { client: "use island", server: "use action" } })` renames the directives
   your code uses, for apps where another tool already owns `"use client"` or `"use server"`.
@@ -164,14 +169,30 @@ export function Chart(props: { points: Map<string, number> }) { … }
 `examples/react` is a runnable app; `pnpm test:e2e` runs it in Chrome, in development and from
 its production build.
 
+## In a framework
+
+A framework that renders pages itself (Farm does) uses the pieces directly instead of
+`renderToStream` and the Vite plugin's entry:
+
+| Need | API |
+| --- | --- |
+| Compile client and action modules | `transformClientModule({ …, reference, strategy })`, `transformActions` from `@farm.js/islx/compiler` |
+| Render islands in its own render | wrap the page in `<IslandsProvider held={parseHeldValues(request)}>` |
+| A layout that hydrates as one root | `withinClientRoot(layout)`; its server-HTML page: `isolateIslands(page)` |
+| An async page under such a layout | `renderServerTree(page, { held, payloadOnly })` on the server; `createServerTreeElement(source, { load, ServerHtml })` in the browser |
+| Hydrate | `createHydrationRuntime({ load, schedule?, wrap?, report? })`, `createServerHtml(runtime)` |
+| Hold early clicks | inline `PREHYDRATION_SCRIPT` in the page |
+| Actions | `handleAction(request, { allowedOrigins, bodySizeLimit, run, mapError, renderFormState })`; `setActionNavigator({ refresh, navigate })` |
+| Navigation with its router | send `F-Values` (`valueHeaders()`), `F-Layouts`, `F-Render`; `refreshDocument` / `swapDocument` or its own swap |
+
 ## Planned
 
 | Entry | For |
 | --- | --- |
-| `@farmjs/islx/react` | server trees (a page rebuilt inside a hydrated layout), partial navigations |
-| `@farmjs/islx/webpack` | webpack, Rspack, and Next.js (Turbopack uses the loader) |
-| `@farmjs/islx/next`, `@farmjs/islx/astro`, `@farmjs/islx/nuxt` | thin framework integrations |
-| `@farmjs/islx/testing` | the conformance suite every integration must pass |
+| `@farm.js/islx/react` | server trees (a page rebuilt inside a hydrated layout), partial navigations |
+| `@farm.js/islx/webpack` | webpack, Rspack, and Next.js (Turbopack uses the loader) |
+| `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt` | thin framework integrations |
+| `@farm.js/islx/testing` | the conformance suite every integration must pass |
 
 ## License
 

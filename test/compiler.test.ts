@@ -3,13 +3,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseSync } from "oxc-parser";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ActionCompileError, getActionId, transformActions } from "@farmjs/islx/compiler";
+import { ActionCompileError, getActionId, transformActions } from "@farm.js/islx/compiler";
 import {
   configureActionKeys,
   generateActionKey,
   getActionReference,
   handleAction,
-} from "@farmjs/islx/server";
+} from "@farm.js/islx/server";
 
 const root = "/app";
 const parse = (code: string) => parseSync("module.tsx", code).program as any;
@@ -58,7 +58,7 @@ export default async function () {}
     const output = compile(source, "client")!.code;
     expect(output).not.toContain("db");
     expect(output).toContain(
-      'import { createServerReference as $$islx_ref } from "@farmjs/islx/client";',
+      'import { createServerReference as $$islx_ref } from "@farm.js/islx/client";',
     );
     expect(output).toContain(
       `export const save = $$islx_ref(${JSON.stringify(getActionId(root, "/app/src/page.tsx", "save"))}, undefined, "save");`,

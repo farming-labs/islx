@@ -22,7 +22,7 @@ import {
   VALUE_SCRIPT_TYPE,
 } from "../protocol/wire";
 
-/** What `@farmjs/islx/react/server` installs: encoding props needs server code. */
+/** What `@farm.js/islx/react/server` installs: encoding props needs server code. */
 export interface IslandServerHook {
   /** Props as JSON with large values addressed, and the value scripts to send first. */
   encode(
@@ -232,7 +232,7 @@ export function createIsland<P extends object>(
     const hook = getIslandServerHook();
     if (!hook) {
       throw new Error(
-        "islx: an island rendered on a server that did not import @farmjs/islx/react/server",
+        "islx: an island rendered on a server that did not import @farm.js/islx/react/server",
       );
     }
 

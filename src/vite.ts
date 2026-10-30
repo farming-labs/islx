@@ -1,8 +1,8 @@
 /**
- * @farmjs/islx/vite: islx for Vite 6 and later (the Environment API).
+ * @farm.js/islx/vite: islx for Vite 6 and later (the Environment API).
  *
  *   import react from "@vitejs/plugin-react";
- *   import { islx } from "@farmjs/islx/vite";
+ *   import { islx } from "@farm.js/islx/vite";
  *   export default defineConfig({ plugins: [react(), islx()] });
  *
  * - Server environments: `"use client"` components render as islands, `"use server"` exports
@@ -171,7 +171,7 @@ async function createParser(): Promise<Parse> {
     };
     return (file, code) => withErrors(oxc.parseSync(file, code));
   } catch {
-    throw new Error("@farmjs/islx/vite needs Vite 8, or oxc-parser installed with an older Vite");
+    throw new Error("@farm.js/islx/vite needs Vite 8, or oxc-parser installed with an older Vite");
   }
 }
 
@@ -342,7 +342,7 @@ export function islx(options: IslxOptions = {}): Plugin[] {
         const entry = isBuild() ? ENTRY_PLACEHOLDER : `${config.base}@id/__x00__${ENTRY_ID}`;
         const modules = isBuild() ? `JSON.parse(${JSON.stringify(MODULES_PLACEHOLDER)})` : "{}";
         return [
-          `import { setBuildDefaults, setServerHooks } from "@farmjs/islx/server";`,
+          `import { setBuildDefaults, setServerHooks } from "@farm.js/islx/server";`,
           `import hooks from ${JSON.stringify(SERVER_HOOKS_ID)};`,
           `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
           `setServerHooks(hooks);`,
@@ -373,8 +373,8 @@ export function islx(options: IslxOptions = {}): Plugin[] {
             `const load = (src) => import(/* @vite-ignore */ src.startsWith("../") ? "/@fs" + new URL(src, root).pathname : ${JSON.stringify(config.base)} + src);`;
         return [
           ...(preamble && !isBuild() ? [`import "@vitejs/plugin-react/preamble";`] : []),
-          `import { createHydrationRuntime, refreshDocument, scheduleHydration, swapDocument } from "@farmjs/islx/react/client";`,
-          `import { enhanceForms, setActionNavigator, setClientHooks, startNavigation, navigate } from "@farmjs/islx/client";`,
+          `import { createHydrationRuntime, refreshDocument, scheduleHydration, swapDocument } from "@farm.js/islx/react/client";`,
+          `import { enhanceForms, setActionNavigator, setClientHooks, startNavigation, navigate } from "@farm.js/islx/client";`,
           `import hooks from ${JSON.stringify(CLIENT_HOOKS_ID)};`,
           `setClientHooks(hooks);`,
           load,

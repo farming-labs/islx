@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { VALUES_HEADER, decode } from "@farmjs/islx";
-import { createValueStore, getValueStore, valueHeaders } from "@farmjs/islx/client";
+import { VALUES_HEADER, decode } from "@farm.js/islx";
+import { createValueStore, getValueStore, valueHeaders } from "@farm.js/islx/client";
 import {
   addressValues,
   escapeScriptJson,
   hashValue,
   parseHeldValues,
   selectValuesToSend,
-} from "@farmjs/islx/server";
+} from "@farm.js/islx/server";
 
 // A docs navigation tree: what a layout passes to its sidebar and its mobile menu.
 const tree = Array.from({ length: 6 }, (_, section) => ({
