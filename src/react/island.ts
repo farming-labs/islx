@@ -69,6 +69,26 @@ export function isolateIslands(element: React.ReactNode): React.ReactElement {
   return React.createElement(getContexts().graph.Provider, { value: false }, element);
 }
 
+const RENDER_STATE_RESOLVER = Symbol.for("islx.react.render-state");
+
+/**
+ * For a framework that knows the request being rendered without React context (a request store):
+ * returns the render's settings when no `IslandsProvider` or `renderToStream` gave them. Keep the
+ * same `sent` set for the whole response.
+ */
+export function setRenderStateResolver(
+  resolve: (() => IslandRenderState | null) | undefined,
+): void {
+  (globalThis as typeof globalThis & Record<symbol, unknown>)[RENDER_STATE_RESOLVER] = resolve;
+}
+
+function resolveRenderState(): IslandRenderState | null {
+  const resolve = (
+    globalThis as typeof globalThis & Record<symbol, (() => IslandRenderState | null) | undefined>
+  )[RENDER_STATE_RESOLVER];
+  return resolve ? resolve() : null;
+}
+
 /**
  * Gives islands a render's settings when the framework renders the page itself (not through
  * `renderToStream`): which values the browser holds, and which this render already wrote.
@@ -204,7 +224,7 @@ export function createIsland<P extends object>(
   function Island(props: P) {
     const { graph, render } = getContexts();
     const insideIsland = React.useContext(graph);
-    const state = React.useContext(render);
+    const state = React.useContext(render) ?? resolveRenderState();
     const id = React.useId();
     if (insideIsland) return React.createElement(Component, props);
     const hook = getIslandServerHook();

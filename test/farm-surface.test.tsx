@@ -114,3 +114,35 @@ describe("frameworks that render pages themselves", () => {
     ]);
   });
 });
+
+describe("a framework's own request store", () => {
+  it("gives islands the render state when no provider does", async () => {
+    const { setRenderStateResolver } = await import("@farmjs/islx/react/server");
+    const Tree = createIsland(
+      ({ items }: { items: string[] }) => <nav>{items.length}</nav>,
+      "/t.tsx",
+      "T",
+    );
+    const items = Array.from({ length: 50 }, (_, index) => `entry number ${index} with some text`);
+    const sent = new Set<string>();
+    let held: Set<string> | null = null;
+    setRenderStateResolver(() => ({ held, sent }));
+    try {
+      const first = await html(
+        <>
+          <Tree items={items} />
+          <Tree items={items} />
+        </>,
+      );
+      const keys = [...first.matchAll(/type="f\/value" name="([0-9a-z]{14})"/g)].map(
+        (match) => match[1]!,
+      );
+      expect(keys).toHaveLength(1);
+      sent.clear();
+      held = new Set(keys);
+      expect(await html(<Tree items={items} />)).not.toContain('type="f/value"');
+    } finally {
+      setRenderStateResolver(undefined);
+    }
+  });
+});

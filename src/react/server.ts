@@ -132,7 +132,9 @@ export {
   createIsland,
   getClientReference,
   isolateIslands,
+  setRenderStateResolver,
   withinClientRoot,
   type ClientReference,
+  type IslandRenderState,
 } from "./island";
 export { PAYLOAD_ONLY_ATTRIBUTE, renderServerTree, type ServerTreeRenderOptions } from "./tree";
