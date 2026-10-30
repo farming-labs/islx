@@ -6,6 +6,7 @@ import * as React from "react";
 import { renderToReadableStream, type RenderToReadableStreamOptions } from "react-dom/server";
 import { encode } from "../protocol/codec";
 import { FORM_STATE_SCRIPT_TYPE, RENDER_HEADER } from "../protocol/wire";
+import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
 import type { ReactFormState } from "../server/handle";
@@ -39,6 +40,14 @@ setIslandServerHook({
     };
   },
   escape: escapeScriptJson,
+  address(payload, skip) {
+    const addressed = addressValues(payload, { encoded: true });
+    return {
+      json: addressed.json,
+      values: selectValuesToSend(addressed, skip).map(({ key, json }) => ({ key, json })),
+    };
+  },
+  action: (value) => encodeActionReference(value),
 });
 
 export interface RenderToStreamOptions extends Omit<RenderToReadableStreamOptions, "formState"> {
@@ -59,6 +68,11 @@ export interface RenderToStreamOptions extends Omit<RenderToReadableStreamOption
    * true; a framework that adds its own scripts turns it off.
    */
   bootstrap?: boolean;
+  /**
+   * Adds the inline script that holds a click or a submit on an island before the browser entry
+   * has run, to replay it once the island hydrates. Default: with the browser entry.
+   */
+  prehydration?: boolean;
 }
 
 /** The script carrying a form post's state to the browser, for `hydrateRoot`. */
@@ -79,7 +93,7 @@ function FormStateScript({ formState }: { formState: ReactFormState }) {
  */
 export async function renderToStream(
   element: React.ReactNode,
-  { request, formState, bootstrap = true, ...options }: RenderToStreamOptions = {},
+  { request, formState, bootstrap = true, prehydration, ...options }: RenderToStreamOptions = {},
 ): Promise<ReadableStream<Uint8Array> & { allReady: Promise<void> }> {
   const held = request ? parseHeldValues(request) : null;
   const { render } = getContexts();
@@ -93,9 +107,15 @@ export async function renderToStream(
   const bootstrapModules = entry
     ? [...(options.bootstrapModules ?? []), entry]
     : options.bootstrapModules;
+  // The inline script runs as soon as the page's content is parsed, before the deferred entry.
+  const bootstrapScriptContent =
+    (prehydration ?? entry !== undefined)
+      ? `${PREHYDRATION_SCRIPT}${options.bootstrapScriptContent ?? ""}`
+      : options.bootstrapScriptContent;
   const stream = await renderToReadableStream(tree, {
     ...options,
     bootstrapModules,
+    bootstrapScriptContent,
     formState: formState as never,
   });
   if (request?.headers.has(RENDER_HEADER)) await stream.allReady;
@@ -107,4 +127,12 @@ export function isPersonalized(request: Request): boolean {
   return parseHeldValues(request).size > 0;
 }
 
-export { createIsland } from "./island";
+export {
+  IslandsProvider,
+  createIsland,
+  getClientReference,
+  isolateIslands,
+  withinClientRoot,
+  type ClientReference,
+} from "./island";
+export { PAYLOAD_ONLY_ATTRIBUTE, renderServerTree, type ServerTreeRenderOptions } from "./tree";

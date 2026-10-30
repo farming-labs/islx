@@ -27,3 +27,9 @@ export {
   type ClientHookEvents,
   type ClientHooks,
 } from "./client/hooks";
+export {
+  INTERACTION_EVENT,
+  PENDING_INTERACTIONS,
+  PREHYDRATION_SCRIPT,
+  REPLAYABLE_SELECTOR,
+} from "./client/prehydration";

@@ -29,6 +29,62 @@ export interface IslandServerHook {
   ): { json: string; values: Array<{ key: string; json: string }> };
   /** A value's JSON, safe in a script element. */
   escape(json: string): string;
+  /** JSON that already carries its tags (a server tree's payload), with large values addressed. */
+  address(
+    payload: Record<string, unknown>,
+    skip: ReadonlySet<string> | null,
+  ): { json: string; values: Array<{ key: string; json: string }> };
+  /** `{"$":"a","v":id,"b"?}` for a server action, or undefined for any other function. */
+  action(value: Function): Record<string, unknown> | undefined;
+}
+
+// A client component the server renders: which module export it is, for server trees.
+const CLIENT_REFERENCE = Symbol.for("islx.react.client-reference");
+
+export interface ClientReference {
+  src: string;
+  exportName: string;
+  Component: React.ComponentType<any>;
+}
+
+/** The module export an island component renders, or undefined for any other type. */
+export function getClientReference(type: unknown): ClientReference | undefined {
+  if (!type || (typeof type !== "function" && typeof type !== "object")) return undefined;
+  return (type as Record<symbol, ClientReference | undefined>)[CLIENT_REFERENCE];
+}
+
+/**
+ * Makes `element`'s client components part of the React root around it (a layout that hydrates
+ * as one root), instead of islands of their own.
+ */
+export function withinClientRoot(element: React.ReactNode): React.ReactElement {
+  return React.createElement(getContexts().graph.Provider, { value: true }, element);
+}
+
+/**
+ * Starts islands again below a `withinClientRoot`: the page a hydrating layout keeps as server
+ * HTML renders its client components as islands of their own.
+ */
+export function isolateIslands(element: React.ReactNode): React.ReactElement {
+  return React.createElement(getContexts().graph.Provider, { value: false }, element);
+}
+
+/**
+ * Gives islands a render's settings when the framework renders the page itself (not through
+ * `renderToStream`): which values the browser holds, and which this render already wrote.
+ */
+export function IslandsProvider({
+  held = null,
+  children,
+}: {
+  held?: ReadonlySet<string> | null;
+  children?: React.ReactNode;
+}): React.ReactElement {
+  const state = React.useMemo<IslandRenderState>(
+    () => ({ held: held && held.size > 0 ? held : null, sent: new Set() }),
+    [held],
+  );
+  return React.createElement(getContexts().render.Provider, { value: state }, children);
 }
 
 const SERVER_HOOK = Symbol.for("islx.react.server");
@@ -216,5 +272,6 @@ export function createIsland<P extends object>(
     );
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;
+  Object.defineProperty(Island, CLIENT_REFERENCE, { value: { src, exportName, Component } });
   return Island as React.ComponentType<P>;
 }

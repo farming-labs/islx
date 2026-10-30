@@ -35,6 +35,11 @@ export interface TransformClientOptions {
   sideEffects?: readonly string[];
   /** The directive that marks a module of client components. Default `"use client"`. */
   directive?: string;
+  /**
+   * When an export hydrates, from the framework's own configuration (a route's setting): wins over
+   * the module's `hydrate` export. Return undefined to use that.
+   */
+  strategy?(exportName: string): IslandStrategy | undefined;
 }
 
 export interface TransformClientResult {
@@ -122,8 +127,13 @@ export function transformClientModule(
     throw new ActionCompileError(message, file, code, node.start);
   };
   const strategies = readStrategies(program, fail);
-  const strategyOf = (name: string): IslandStrategy =>
-    strategies.byName.get(name) ?? strategies.all ?? "load";
+  const strategyOf = (name: string): IslandStrategy => {
+    const configured = options.strategy?.(name);
+    if (configured !== undefined && !ISLAND_STRATEGIES.includes(configured)) {
+      throw new Error(`islx: strategy for ${name} must be one of ${ISLAND_STRATEGIES.join(", ")}`);
+    }
+    return configured ?? strategies.byName.get(name) ?? strategies.all ?? "load";
+  };
 
   const output = new MagicString(code);
   const wrapped: Array<{ local: string; exportName: string }> = [];
