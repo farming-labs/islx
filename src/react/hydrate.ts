@@ -7,11 +7,12 @@ import * as React from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { createServerReference } from "../client/actions";
 import { emit } from "../client/hooks";
-import { HYDRATED_ATTRIBUTE, scheduleHydration, type IslandStrategy } from "../client/schedule";
+import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged } from "../protocol/codec";
 import {
   ACTION_TAG,
+  HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
   ISLAND_ELEMENT,
   PROPS_SCRIPT_TYPE,
@@ -37,7 +38,10 @@ export interface HydrationOptions {
   report?(message: string, error?: unknown): void;
   /** The value store. Default: the page's. */
   values?: ValueStore;
-  /** Schedules hydration. Default: the island's strategy (`scheduleHydration`). */
+  /**
+   * Schedules hydration. Default: `scheduleHydration`, loaded on first use, so a framework that
+   * passes its own scheduler ships none of it.
+   */
   schedule?: typeof scheduleHydration;
 }
 
@@ -150,7 +154,10 @@ export function createHydrationRuntime(options: HydrationOptions) {
   const roots = new Map<Element, RootRecord>();
   const pending = new Map<Element, AbortController>();
   const values = options.values ?? getValueStore();
-  const schedule = options.schedule ?? scheduleHydration;
+  const schedule: typeof scheduleHydration =
+    options.schedule ??
+    ((scheduleOptions) =>
+      import("../client/schedule").then((module) => module.scheduleHydration(scheduleOptions)));
   const report =
     options.report ??
     ((message: string, error?: unknown) => console.error(`[islx] ${message}`, error));

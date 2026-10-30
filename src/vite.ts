@@ -373,12 +373,12 @@ export function islx(options: IslxOptions = {}): Plugin[] {
             `const load = (src) => import(/* @vite-ignore */ src.startsWith("../") ? "/@fs" + new URL(src, root).pathname : ${JSON.stringify(config.base)} + src);`;
         return [
           ...(preamble && !isBuild() ? [`import "@vitejs/plugin-react/preamble";`] : []),
-          `import { createHydrationRuntime, refreshDocument, swapDocument } from "@farmjs/islx/react/client";`,
+          `import { createHydrationRuntime, refreshDocument, scheduleHydration, swapDocument } from "@farmjs/islx/react/client";`,
           `import { enhanceForms, setActionNavigator, setClientHooks, startNavigation, navigate } from "@farmjs/islx/client";`,
           `import hooks from ${JSON.stringify(CLIENT_HOOKS_ID)};`,
           `setClientHooks(hooks);`,
           load,
-          `const runtime = createHydrationRuntime({ load });`,
+          `const runtime = createHydrationRuntime({ load, schedule: scheduleHydration });`,
           `setActionNavigator({ refresh: () => refreshDocument(runtime), navigate: (href) => navigate(href) });`,
           `enhanceForms();`,
           ...(options.navigation === false

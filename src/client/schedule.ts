@@ -25,8 +25,8 @@ export function isIslandStrategy(value: unknown): value is IslandStrategy {
   return ISLAND_STRATEGIES.includes(value as IslandStrategy);
 }
 
-/** Set on an island once it hydrated (and its held interaction was replayed). */
-export const HYDRATED_ATTRIBUTE = "hydrated";
+import { HYDRATED_ATTRIBUTE } from "../protocol/wire";
+export { HYDRATED_ATTRIBUTE };
 
 type ReplayKind = "click" | "submit";
 interface Interaction {
