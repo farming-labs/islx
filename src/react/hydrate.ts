@@ -39,10 +39,10 @@ export interface HydrationOptions {
   /** The value store. Default: the page's. */
   values?: ValueStore;
   /**
-   * Schedules hydration. Default: `scheduleHydration`, loaded on first use, so a framework that
-   * passes its own scheduler ships none of it.
+   * When each island hydrates: `scheduleHydration` (its strategy), or the framework's own. Required,
+   * so a framework with its own scheduler ships none of islx's.
    */
-  schedule?: typeof scheduleHydration;
+  schedule: typeof scheduleHydration;
 }
 
 interface RootRecord {
@@ -154,10 +154,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
   const roots = new Map<Element, RootRecord>();
   const pending = new Map<Element, AbortController>();
   const values = options.values ?? getValueStore();
-  const schedule: typeof scheduleHydration =
-    options.schedule ??
-    ((scheduleOptions) =>
-      import("../client/schedule").then((module) => module.scheduleHydration(scheduleOptions)));
+  const schedule = options.schedule;
   const report =
     options.report ??
     ((message: string, error?: unknown) => console.error(`[islx] ${message}`, error));

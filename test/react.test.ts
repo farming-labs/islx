@@ -2,7 +2,7 @@
 import { act, createElement as h, useActionState, useState, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIsland } from "@farmjs/islx/react";
-import { createHydrationRuntime } from "@farmjs/islx/react/client";
+import { createHydrationRuntime, scheduleHydration } from "@farmjs/islx/react/client";
 import { renderToStream } from "@farmjs/islx/react/server";
 import { getValueStore } from "@farmjs/islx/client";
 import {
@@ -78,7 +78,11 @@ const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 
 function runtime(extra: Partial<Parameters<typeof createHydrationRuntime>[0]> = {}) {
-  return createHydrationRuntime({ load: async (src) => modules[src]!, ...extra });
+  return createHydrationRuntime({
+    load: async (src) => modules[src]!,
+    schedule: scheduleHydration,
+    ...extra,
+  });
 }
 
 async function mount(

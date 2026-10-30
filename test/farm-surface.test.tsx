@@ -5,7 +5,7 @@ import { parseSync } from "oxc-parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PENDING_INTERACTIONS, PREHYDRATION_SCRIPT, getValueStore } from "@farmjs/islx/client";
 import { IslandsProvider, createIsland } from "@farmjs/islx/react";
-import { createHydrationRuntime } from "@farmjs/islx/react/client";
+import { createHydrationRuntime, scheduleHydration } from "@farmjs/islx/react/client";
 import "@farmjs/islx/react/server";
 import { transformClientModule } from "../src/compiler/client";
 
@@ -48,7 +48,10 @@ describe("interactions before the browser entry runs", () => {
       expect(click.defaultPrevented).toBe(true);
       expect(pending()).toHaveLength(1);
 
-      const runtime = createHydrationRuntime({ load: async (src) => modules[src]! });
+      const runtime = createHydrationRuntime({
+        load: async (src) => modules[src]!,
+        schedule: scheduleHydration,
+      });
       await act(async () => {
         await runtime.hydrate(document);
       });
