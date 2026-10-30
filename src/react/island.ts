@@ -7,7 +7,9 @@
  * build. The browser build keeps the module as it is.
  */
 import * as React from "react";
-import { preloadModule } from "react-dom";
+// A namespace import: React 18's react-dom has no preloadModule, and a named import would fail
+// to link in an app that only loads this module.
+import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
 import {
@@ -260,7 +262,7 @@ export function createIsland<P extends object>(
     // links into the head, once each. Deferred islands keep their code for later.
     if (strategy === "load") {
       for (const href of getBuildDefaults().modules?.[src] ?? [])
-        preloadModule(href, { as: "script" });
+        ReactDOM.preloadModule?.(href, { as: "script" });
     }
 
     return React.createElement(
