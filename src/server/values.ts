@@ -52,6 +52,11 @@ export interface AddressOptions {
    * undefined to fall back to the codec, which throws for functions.
    */
   encodeSpecial?: (value: unknown) => unknown;
+  /**
+   * The input is JSON already, with its own tags (a server tree's payload): no type is tagged and
+   * no object is wrapped, values are only addressed.
+   */
+  encoded?: boolean;
 }
 
 /**
@@ -62,7 +67,7 @@ export interface AddressOptions {
  */
 export function addressValues(
   props: Record<string, unknown>,
-  { minLength = VALUE_MIN_LENGTH, encodeSpecial }: AddressOptions = {},
+  { minLength = VALUE_MIN_LENGTH, encodeSpecial, encoded = false }: AddressOptions = {},
 ): AddressedProps {
   const values = new Map<string, AddressedValue>();
   const reference = (json: string, children: string[], parent: string[]) => {
@@ -76,12 +81,12 @@ export function addressValues(
   // a value is addressed by its full size, so a tree whose parts are all addressed still gets one
   // key of its own.
   const encode = (value: unknown, parent: string[]): [json: string, length: number] => {
-    const special = encodeSpecial?.(value);
+    const special = encoded ? undefined : encodeSpecial?.(value);
     if (special !== undefined) {
       const json = JSON.stringify(special);
       return [json, json.length];
     }
-    const leaf = encodeLeaf(value);
+    const leaf = encoded ? undefined : encodeLeaf(value);
     if (leaf) {
       const json = JSON.stringify(leaf);
       return [json, json.length];
@@ -98,7 +103,7 @@ export function addressValues(
     if (seen.has(value)) throw new TypeError("circular values are not serializable");
     seen.add(value);
     try {
-      if (value instanceof Map || value instanceof Set) {
+      if (!encoded && (value instanceof Map || value instanceof Set)) {
         // The entries become an array inside the tag, addressed like any array.
         const entries =
           value instanceof Map ? Array.from(value, ([key, entry]) => [key, entry]) : [...value];
@@ -129,7 +134,7 @@ export function addressValues(
         }
       }
       let json = Array.isArray(value) ? `[${parts.join(",")}]` : `{${parts.join(",")}}`;
-      if (!Array.isArray(value) && needsObjectTag(value)) {
+      if (!encoded && !Array.isArray(value) && needsObjectTag(value)) {
         json = `{"$":"${OBJECT_TAG}","v":${json}}`;
         length += 14;
       }

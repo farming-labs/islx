@@ -15,6 +15,8 @@ export const ISLAND_ELEMENT = "f-island";
 export const PROPS_SCRIPT_TYPE = "f/props";
 /** The script type of a value sent once; its `name` attribute is the value's key. */
 export const VALUE_SCRIPT_TYPE = "f/value";
+/** Set on an island once it hydrated (and its held interaction was replayed). */
+export const HYDRATED_ATTRIBUTE = "hydrated";
 /** The element that keeps server output passed to an island as children. */
 export const SLOT_ELEMENT = "f-slot";
 /** The script type of a page's server tree, rebuilt in the browser without the page's HTML. */

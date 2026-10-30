@@ -10,6 +10,8 @@
  *
  * Until it hydrates, an island is its server HTML: links and native forms keep working.
  */
+import { INTERACTION_EVENT, hasPendingInteraction, takePendingInteractions } from "./prehydration";
+
 export type IslandStrategy = "load" | "idle" | "visible" | "interaction";
 
 export const ISLAND_STRATEGIES: readonly IslandStrategy[] = [
@@ -23,8 +25,8 @@ export function isIslandStrategy(value: unknown): value is IslandStrategy {
   return ISLAND_STRATEGIES.includes(value as IslandStrategy);
 }
 
-/** Set on an island once it hydrated (and its held interaction was replayed). */
-export const HYDRATED_ATTRIBUTE = "hydrated";
+import { HYDRATED_ATTRIBUTE } from "../protocol/wire";
+export { HYDRATED_ATTRIBUTE };
 
 type ReplayKind = "click" | "submit";
 interface Interaction {
@@ -121,15 +123,27 @@ function replay({ target, kind }: Interaction): void {
 }
 
 function finish(container: Element, held: Interaction | null): void {
+  // What this runtime held, and what the inline script held before it ran.
+  const interactions = new Map<Element, Interaction>();
+  if (held) interactions.set(held.target, held);
+  for (const pending of takePendingInteractions(container)) {
+    if (pending.kind)
+      interactions.set(pending.target, { target: pending.target, kind: pending.kind });
+  }
   if (!container.isConnected) return;
   container.setAttribute(HYDRATED_ATTRIBUTE, "");
-  if (!held || !held.target.isConnected) return;
-  // After React has attached its handlers in this task.
-  window.setTimeout(() => {
-    if (container.isConnected && held.target.isConnected && container.contains(held.target)) {
-      replay(held);
-    }
-  }, 0);
+  for (const interaction of interactions.values()) {
+    // After React has attached its handlers in this task.
+    window.setTimeout(() => {
+      if (
+        container.isConnected &&
+        interaction.target.isConnected &&
+        container.contains(interaction.target)
+      ) {
+        replay(interaction);
+      }
+    }, 0);
+  }
 }
 
 export interface ScheduleOptions<T> {
@@ -208,6 +222,16 @@ export function scheduleHydration<T>({
       signal.addEventListener("abort", abort, { once: true });
       removeAbort = () => signal.removeEventListener("abort", abort);
     }
+
+    // The inline script already holds an interaction here: hydrate now.
+    if (hasPendingInteraction(container)) return start();
+    // One it sees from now on starts hydration too, whatever the strategy.
+    const onAnnounced = (event: Event) => {
+      const detail = (event as CustomEvent<{ target?: unknown }>).detail;
+      if (detail?.target instanceof Element && container.contains(detail.target)) start();
+    };
+    document.addEventListener(INTERACTION_EVENT, onAnnounced);
+    captures.add(() => document.removeEventListener(INTERACTION_EVENT, onAnnounced));
 
     if (resolved === "idle") {
       triggers.add(whenIdle(start));

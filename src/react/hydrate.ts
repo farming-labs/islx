@@ -7,11 +7,12 @@ import * as React from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { createServerReference } from "../client/actions";
 import { emit } from "../client/hooks";
-import { HYDRATED_ATTRIBUTE, scheduleHydration, type IslandStrategy } from "../client/schedule";
+import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged } from "../protocol/codec";
 import {
   ACTION_TAG,
+  HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
   ISLAND_ELEMENT,
   PROPS_SCRIPT_TYPE,
@@ -24,6 +25,7 @@ import {
   getTag,
 } from "../protocol/wire";
 import { getContexts } from "./island";
+import { updateServerTrees } from "./tree";
 
 const ISLAND_SELECTOR = `${ISLAND_ELEMENT}[src]`;
 
@@ -36,8 +38,11 @@ export interface HydrationOptions {
   report?(message: string, error?: unknown): void;
   /** The value store. Default: the page's. */
   values?: ValueStore;
-  /** Schedules hydration. Default: the island's strategy (`scheduleHydration`). */
-  schedule?: typeof scheduleHydration;
+  /**
+   * When each island hydrates: `scheduleHydration` (its strategy), or the framework's own. Required,
+   * so a framework with its own scheduler ships none of islx's.
+   */
+  schedule: typeof scheduleHydration;
 }
 
 interface RootRecord {
@@ -149,7 +154,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
   const roots = new Map<Element, RootRecord>();
   const pending = new Map<Element, AbortController>();
   const values = options.values ?? getValueStore();
-  const schedule = options.schedule ?? scheduleHydration;
+  const schedule = options.schedule;
   const report =
     options.report ??
     ((message: string, error?: unknown) => console.error(`[islx] ${message}`, error));
@@ -418,9 +423,9 @@ export function createHydrationRuntime(options: HydrationOptions) {
     return carried;
   }
 
-  /** Re-renders the islands of a module that changed (hot module replacement). */
+  /** Re-renders the islands and server trees of a module that changed (hot module replacement). */
   function update(src: string, module: Record<string, unknown>): number {
-    let updated = 0;
+    let updated = updateServerTrees(src, module);
     for (const [container, record] of roots) {
       if (record.src !== src) continue;
       const Component = module[record.exportName];
@@ -469,3 +474,38 @@ export function createHydrationRuntime(options: HydrationOptions) {
 }
 
 export type HydrationRuntime = ReturnType<typeof createHydrationRuntime>;
+
+/**
+ * A page a hydrating layout keeps as server HTML (and a server tree's `<f-html>` part). React owns
+ * only the wrapper, so the islands inside start after React commits that HTML and stop when it is
+ * replaced or the layout unmounts. The islands are captured when they start, because React has
+ * already swapped the HTML by the time the cleanup runs.
+ */
+export function createServerHtml(
+  runtime: Pick<HydrationRuntime, "hydrate" | "dispose">,
+): React.ComponentType<
+  Record<string, unknown> & { as?: string; dangerouslySetInnerHTML: { __html: string } }
+> {
+  return function ServerHtml({ as = "div", ...props }) {
+    const ref = React.useRef<HTMLElement>(null);
+    const html = props.dangerouslySetInnerHTML.__html;
+    React.useLayoutEffect(() => {
+      const page = ref.current;
+      if (!page) return;
+      const islands = Array.from(page.querySelectorAll(ISLAND_SELECTOR));
+      if (islands.length === 0) return;
+      const controller = new AbortController();
+      runtime.hydrate(page, controller.signal).catch((error) => {
+        console.error("[islx] Could not hydrate the islands in this part of the page:", error);
+      });
+      return () => {
+        controller.abort();
+        // Unmounting another root while this commit runs is not allowed: release them after it.
+        queueMicrotask(() => {
+          for (const island of islands) runtime.dispose(island);
+        });
+      };
+    }, [html]);
+    return React.createElement(as, { ...props, ref });
+  };
+}

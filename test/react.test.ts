@@ -2,7 +2,7 @@
 import { act, createElement as h, useActionState, useState, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIsland } from "@farmjs/islx/react";
-import { createHydrationRuntime } from "@farmjs/islx/react/client";
+import { createHydrationRuntime, scheduleHydration } from "@farmjs/islx/react/client";
 import { renderToStream } from "@farmjs/islx/react/server";
 import { getValueStore } from "@farmjs/islx/client";
 import {
@@ -78,7 +78,11 @@ const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 
 function runtime(extra: Partial<Parameters<typeof createHydrationRuntime>[0]> = {}) {
-  return createHydrationRuntime({ load: async (src) => modules[src]!, ...extra });
+  return createHydrationRuntime({
+    load: async (src) => modules[src]!,
+    schedule: scheduleHydration,
+    ...extra,
+  });
 }
 
 async function mount(
@@ -192,10 +196,12 @@ describe("islands", () => {
     button.click();
     await act(async () => {
       release();
-      await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(islands.rootCount()).toBe(1);
-    expect(document.querySelector("[data-counter=lazy]")!.textContent).toBe("lazy 1");
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+      expect(document.querySelector("[data-counter=lazy]")!.textContent).toBe("lazy 1");
+    });
   });
 
   it("keep an island's state when the page renders again", async () => {
@@ -266,10 +272,11 @@ describe("actions in islands", () => {
     await mount(markup);
     await act(async () => {
       document.querySelector("button")!.click();
-      await vi.waitFor(() => expect(hoisted).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    expect(document.querySelector("button")!.textContent).toBe("core:Ada");
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("button")!.textContent).toBe("core:Ada");
+    });
     expect(hoisted).toHaveBeenCalledWith(["core"], "Ada");
   });
 
