@@ -114,15 +114,25 @@ export const NOT_A_VALUE: unique symbol = Symbol.for("islx.codec.not-a-value");
 /** A plain object from entries; `defineProperty`, so a "__proto__" key stays an ordinary key. */
 export function plainObject(entries: Iterable<[string, unknown]>): Record<string, unknown> {
   const object: Record<string, unknown> = {};
-  for (const [key, value] of entries) {
+  for (const [key, value] of entries) setOwn(object, key, value);
+  return object;
+}
+
+/**
+ * Sets an own property. Plain assignment keeps the object fast; only a `"__proto__"` key needs
+ * `defineProperty`, which assignment would turn into a prototype change.
+ */
+export function setOwn(object: Record<string, unknown>, key: string, value: unknown): void {
+  if (key === "__proto__") {
     Object.defineProperty(object, key, {
       value,
       enumerable: true,
       writable: true,
       configurable: true,
     });
+  } else {
+    object[key] = value;
   }
-  return object;
 }
 
 /**

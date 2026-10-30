@@ -9,7 +9,7 @@ import { createServerReference } from "../client/actions";
 import { emit } from "../client/hooks";
 import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
-import { NOT_A_VALUE, decode, decodeTagged } from "../protocol/codec";
+import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
 import {
   ACTION_TAG,
   HYDRATED_ATTRIBUTE,
@@ -92,8 +92,28 @@ function readFormState(document: Document): unknown {
   }
 }
 
+/**
+ * Revived values, by the object the value store resolved. Islands that share a value (one sent
+ * once for several islands) then share the revived object instead of walking it again. A value
+ * with a slot is not kept: a slot's HTML belongs to one island.
+ */
+const revivedValues = new WeakMap<object, unknown>();
+let slotsRevived = 0;
+
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
 function revive(value: unknown, container: Element): unknown {
+  if (value && typeof value === "object") {
+    const cached = revivedValues.get(value);
+    if (cached !== undefined) return cached;
+    const slotsBefore = slotsRevived;
+    const revived = reviveUncached(value, container);
+    if (slotsRevived === slotsBefore) revivedValues.set(value, revived);
+    return revived;
+  }
+  return value;
+}
+
+function reviveUncached(value: object, container: Element): unknown {
   if (Array.isArray(value)) {
     let changed = false;
     const revived = value.map((entry) => {
@@ -103,7 +123,6 @@ function revive(value: unknown, container: Element): unknown {
     });
     return changed ? revived : value;
   }
-  if (!value || typeof value !== "object") return value;
   const object = value as Record<string, unknown>;
   const tag = getTag(object);
   if (tag === ACTION_TAG && typeof object[TAG_VALUE] === "string") {
@@ -111,6 +130,7 @@ function revive(value: unknown, container: Element): unknown {
     return createServerReference(object[TAG_VALUE], typeof token === "string" ? token : undefined);
   }
   if (tag === SLOT_TAG && typeof object[TAG_VALUE] === "string") {
+    slotsRevived++;
     const name = object[TAG_VALUE];
     let html = "";
     for (const slot of container.querySelectorAll(SLOT_ELEMENT)) {
@@ -137,13 +157,7 @@ function revive(value: unknown, container: Element): unknown {
   const revived: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(object)) {
     const next = revive(entry, container);
-    // defineProperty: a "__proto__" key stays an ordinary property.
-    Object.defineProperty(revived, key, {
-      value: next,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
+    setOwn(revived, key, next);
     if (next !== entry) changed = true;
   }
   return changed ? revived : value;
@@ -239,6 +253,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
     let parsed: unknown = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("props must be an object");
+    // No tag anywhere: plain JSON, nothing to resolve or revive.
+    if (!text.includes(`"${TAG}"`)) return parsed as Record<string, unknown>;
     if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);

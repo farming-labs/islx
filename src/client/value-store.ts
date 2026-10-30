@@ -14,6 +14,7 @@ import {
   VALUE_SCRIPT_TYPE,
   getTag,
 } from "../protocol/wire";
+import { setOwn } from "../protocol/codec";
 
 /** Past this many values the store starts over at the next navigation. */
 const MAX_STORED_VALUES = 1024;
@@ -54,7 +55,9 @@ export function createValueStore(): ValueStore {
     if (entry.state === "resolving") throw new Error(`islx value ${key} refers to itself`);
     entry.state = "resolving";
     try {
-      entry.value = resolve(JSON.parse(entry.json));
+      // JSON.parse keeps a "__proto__" key as an own property: untagged JSON needs no walk.
+      const parsed = JSON.parse(entry.json);
+      entry.value = entry.json.includes(`"${TAG}"`) ? resolve(parsed) : parsed;
     } catch (error) {
       entry.state = "raw";
       throw error;
@@ -84,14 +87,7 @@ export function createValueStore(): ValueStore {
 
   const resolveEntries = (object: Record<string, unknown>): Record<string, unknown> => {
     const resolved: Record<string, unknown> = {};
-    for (const key of Object.keys(object)) {
-      Object.defineProperty(resolved, key, {
-        value: resolve(object[key]),
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-    }
+    for (const key of Object.keys(object)) setOwn(resolved, key, resolve(object[key]));
     return resolved;
   };
 

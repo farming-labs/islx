@@ -158,6 +158,54 @@ describe("islands", () => {
     expect(again).not.toContain('type="f/value"');
   });
 
+  it("share one decoded value between the islands that received it", async () => {
+    const tree = Array.from({ length: 40 }, (_, index) => ({
+      title: `Page ${index} about rendering`,
+      href: `/docs/${index}`,
+      updated: new Date(Date.UTC(2026, 9, index + 1)),
+    }));
+    const seen: unknown[] = [];
+    modules["/src/seen.tsx"] = {
+      SeenTree({ tree }: { tree: unknown }) {
+        seen.push(tree);
+        return h("nav", null, "tree");
+      },
+    };
+    const markup = await html(
+      h("div", null, h(SeenTreeIsland, { tree }), h(SeenTreeIsland, { tree })),
+    );
+    expect(markup.match(/type="f\/value"/g)?.length).toBe(1);
+    await mount(markup);
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.at(-1)).toBe(seen.at(-2));
+    const decoded = seen.at(-1) as typeof tree;
+    expect(decoded[3]!.updated).toBeInstanceOf(Date);
+    expect(decoded[3]!.updated.toISOString()).toBe("2026-10-04T00:00:00.000Z");
+  });
+
+  it("keep a '__proto__' key in tagged props and values as data", async () => {
+    let received: Record<string, unknown> | undefined;
+    modules["/src/seen.tsx"] = {
+      SeenTree(props: Record<string, unknown>) {
+        received = props;
+        return h("nav", null, "tree");
+      },
+    };
+    const data = '{"__proto__":{"admin":true},"at":{"$":"D","v":"2026-10-29T00:00:00.000Z"}}';
+    await mount(
+      `<script type="f/value" name="0value0proto0k">${data}</script>` +
+        '<f-island src="/src/seen.tsx" export="SeenTree" props="p1" strategy="load"><nav>tree</nav></f-island>' +
+        `<script type="f/props" for="p1">{"inline":${data},"shared":{"$":"r","v":"0value0proto0k"}}</script>`,
+    );
+    for (const key of ["inline", "shared"]) {
+      const value = received![key] as Record<string, unknown>;
+      expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+      expect((value as { admin?: unknown }).admin).toBeUndefined();
+      expect(Object.keys(value)).toEqual(["__proto__", "at"]);
+      expect(value.at).toBeInstanceOf(Date);
+    }
+  });
+
   it("render a client component inside an island as part of it, not as another island", async () => {
     const markup = await html(h(OuterIsland));
     expect(markup.match(/<f-island/g)?.length).toBe(1);
@@ -239,6 +287,11 @@ function ShowsTreeComponent({ tree }: { tree: Array<{ title: string }> }) {
 modules["/src/tree.tsx"] = { ShowsTreeComponent };
 const ShowsTree = createIsland(ShowsTreeComponent, "/src/tree.tsx", "ShowsTreeComponent");
 const ShowsTreeIsland = createIsland(ShowsTreeComponent, "/src/tree.tsx", "ShowsTreeComponent");
+const SeenTreeIsland = createIsland(
+  (() => h("nav", null, "tree")) as (props: { tree: unknown }) => ReactNode,
+  "/src/seen.tsx",
+  "SeenTree",
+);
 
 describe("actions in islands", () => {
   it("arrive as functions that call the server with their sealed values", async () => {
