@@ -3,7 +3,7 @@
  * server code they need (values, action references); `renderToStream` renders a page.
  */
 import * as React from "react";
-import { renderToReadableStream, type RenderToReadableStreamOptions } from "react-dom/server";
+import type { RenderToReadableStreamOptions } from "react-dom/server";
 import { encode } from "../protocol/codec";
 import { FORM_STATE_SCRIPT_TYPE, RENDER_HEADER } from "../protocol/wire";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
@@ -112,6 +112,9 @@ export async function renderToStream(
     (prehydration ?? entry !== undefined)
       ? `${PREHYDRATION_SCRIPT}${options.bootstrapScriptContent ?? ""}`
       : options.bootstrapScriptContent;
+  // Loaded here, not at the top: importing this module (for islands' server code) must work in any
+  // React environment, including a react-server one that has no renderToReadableStream.
+  const { renderToReadableStream } = await import("react-dom/server");
   const stream = await renderToReadableStream(tree, {
     ...options,
     bootstrapModules,
