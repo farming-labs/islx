@@ -11,3 +11,5 @@ export {
   type IslandRenderState,
 } from "./react/island";
 export type { IslandStrategy } from "./client/schedule";
+/** Server trees, shared by the framework's server and browser code (server code needs `react/server` imported). */
+export { renderServerTree, type ServerTreeRenderOptions } from "./react/tree";
