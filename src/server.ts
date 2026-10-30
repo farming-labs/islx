@@ -1,4 +1,4 @@
-/** @farmjs/islx/server: values sent once, sealing, and server actions. Server only. */
+/** @farm.js/islx/server: values sent once, sealing, and server actions. Server only. */
 export {
   VALUE_MIN_LENGTH,
   addressValues,

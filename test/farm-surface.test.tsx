@@ -3,10 +3,10 @@ import { act, useState } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { parseSync } from "oxc-parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PENDING_INTERACTIONS, PREHYDRATION_SCRIPT, getValueStore } from "@farmjs/islx/client";
-import { IslandsProvider, createIsland } from "@farmjs/islx/react";
-import { createHydrationRuntime, scheduleHydration } from "@farmjs/islx/react/client";
-import "@farmjs/islx/react/server";
+import { PENDING_INTERACTIONS, PREHYDRATION_SCRIPT, getValueStore } from "@farm.js/islx/client";
+import { IslandsProvider, createIsland } from "@farm.js/islx/react";
+import { createHydrationRuntime, scheduleHydration } from "@farm.js/islx/react/client";
+import "@farm.js/islx/react/server";
 import { transformClientModule } from "../src/compiler/client";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -120,7 +120,7 @@ describe("frameworks that render pages themselves", () => {
 
 describe("a framework's own request store", () => {
   it("gives islands the render state when no provider does", async () => {
-    const { setRenderStateResolver } = await import("@farmjs/islx/react/server");
+    const { setRenderStateResolver } = await import("@farm.js/islx/react/server");
     const Tree = createIsland(
       ({ items }: { items: string[] }) => <nav>{items.length}</nav>,
       "/t.tsx",

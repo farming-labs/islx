@@ -1,4 +1,4 @@
-/** @farmjs/islx/react/client: hydrating a page's React islands. */
+/** @farm.js/islx/react/client: hydrating a page's React islands. */
 export {
   createHydrationRuntime,
   createServerHtml,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { islx, resolveDirectives } from "@farmjs/islx/vite";
+import { islx, resolveDirectives } from "@farm.js/islx/vite";
 
 /** The plugin's transform, as Vite runs it in an environment. */
 async function transformer(options: Parameters<typeof islx>[0] = {}) {

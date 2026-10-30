@@ -630,14 +630,14 @@ export interface ServerTreeRenderOptions {
  * Resolves a server page and returns what renders in its place: the resolved tree and its
  * payload. Errors from the page's own code (a framework's redirect or not-found) propagate
  * unchanged. Suspense children resolve concurrently and stream as React renders them.
- * Needs `@farmjs/islx/react/server` imported (large values and actions are encoded there).
+ * Needs `@farm.js/islx/react/server` imported (large values and actions are encoded there).
  */
 export async function renderServerTree(
   element: React.ReactNode,
   options: ServerTreeRenderOptions = {},
 ): Promise<React.ReactElement> {
   const hook = getIslandServerHook();
-  if (!hook) throw new Error("islx: renderServerTree needs @farmjs/islx/react/server imported");
+  if (!hook) throw new Error("islx: renderServerTree needs @farm.js/islx/react/server imported");
   const isolate = options.isolate ?? isolateIslands;
   const state: ResolveState = {
     nextId: 0,

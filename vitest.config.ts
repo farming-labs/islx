@@ -6,8 +6,8 @@ const source = (path: string) => fileURLToPath(new URL(`./src/${path}`, import.m
 export default defineConfig({
   resolve: {
     alias: [
-      { find: /^@farmjs\/islx$/, replacement: source("index.ts") },
-      { find: /^@farmjs\/islx\/(.*)$/, replacement: source("$1.ts") },
+      { find: /^@farm\.js\/islx$/, replacement: source("index.ts") },
+      { find: /^@farm\.js\/islx\/(.*)$/, replacement: source("$1.ts") },
     ],
   },
   test: {

@@ -4,7 +4,7 @@ import {
   createServerReference,
   decodeActionReference,
   setActionNavigator,
-} from "@farmjs/islx/client";
+} from "@farm.js/islx/client";
 
 type Sent = { headers: Record<string, string>; body: BodyInit };
 
@@ -149,7 +149,7 @@ describe("arguments with form data and files", () => {
 
 describe("server-component forms", () => {
   it("submit as a call once JavaScript runs, without the runtime's fields", async () => {
-    const { enhanceForms } = await import("@farmjs/islx/client");
+    const { enhanceForms } = await import("@farm.js/islx/client");
     const sent = mockFetch(() => json({ result: null }));
     enhanceForms();
     document.body.innerHTML = `<form action="" method="POST">
@@ -167,7 +167,7 @@ describe("server-component forms", () => {
   });
 
   it("leave forms that post no action to the browser", async () => {
-    const { enhanceForms } = await import("@farmjs/islx/client");
+    const { enhanceForms } = await import("@farm.js/islx/client");
     enhanceForms();
     document.body.innerHTML = `<form action="/search"><input name="q"></form>`;
     const event = new Event("submit", { bubbles: true, cancelable: true });

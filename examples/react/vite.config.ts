@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { islx } from "@farmjs/islx/vite";
+import { islx } from "@farm.js/islx/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({

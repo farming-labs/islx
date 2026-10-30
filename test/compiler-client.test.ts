@@ -1,6 +1,6 @@
 import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
-import { ActionCompileError } from "@farmjs/islx/compiler";
+import { ActionCompileError } from "@farm.js/islx/compiler";
 import { transformClientModule } from "../src/compiler/client";
 
 const compile = (code: string) =>
@@ -31,7 +31,7 @@ export default function () { return null; }
       { exportName: "default", strategy: "load" },
     ]);
     expect(result.code).toContain(
-      'import { createIsland as $$islx_island } from "@farmjs/islx/react";',
+      'import { createIsland as $$islx_island } from "@farm.js/islx/react";',
     );
     expect(result.code).toContain('$$islx_island(Chart, "src/widgets.tsx", "Chart", "load")');
     expect(result.code).toContain('$$islx_island(Hidden, "src/widgets.tsx", "Tooltip", "load")');

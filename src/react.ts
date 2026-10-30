@@ -1,7 +1,7 @@
 /**
- * @farmjs/islx/react: islands for React. `createIsland` is what the compiler wraps client
- * components with; rendering lives in `@farmjs/islx/react/server`, hydration in
- * `@farmjs/islx/react/client`.
+ * @farm.js/islx/react: islands for React. `createIsland` is what the compiler wraps client
+ * components with; rendering lives in `@farm.js/islx/react/server`, hydration in
+ * `@farm.js/islx/react/client`.
  */
 export {
   IslandsProvider,

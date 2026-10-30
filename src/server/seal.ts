@@ -89,7 +89,7 @@ async function importKey(secret: string): Promise<CryptoKey> {
   const bytes = fromBase64url(secret.trim());
   if (!bytes || bytes.length !== KEY_BYTES) {
     throw new TypeError(
-      "an actions key must be 32 random bytes as base64url; create one with generateActionKey() from @farmjs/islx/server",
+      "an actions key must be 32 random bytes as base64url; create one with generateActionKey() from @farm.js/islx/server",
     );
   }
   return crypto.subtle.importKey("raw", bytes as BufferSource, "AES-GCM", false, [

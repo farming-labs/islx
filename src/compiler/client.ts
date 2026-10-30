@@ -207,7 +207,7 @@ export function transformClientModule(
   }
   if (wrapped.length === 0) return null;
 
-  const runtime = options.runtime ?? "@farmjs/islx/react";
+  const runtime = options.runtime ?? "@farm.js/islx/react";
   const src = options.reference(relative);
   const lines = [
     ...wrapped.map(({ local, exportName }, index) => {

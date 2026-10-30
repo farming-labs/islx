@@ -1,5 +1,5 @@
 /**
- * @farmjs/islx/react/client: hydrating a page's islands. Each island is its own React root,
+ * @farm.js/islx/react/client: hydrating a page's islands. Each island is its own React root,
  * started when its strategy says. A root that fails restores the island's server HTML, so a broken
  * component never blanks the page.
  */

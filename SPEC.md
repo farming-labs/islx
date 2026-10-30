@@ -202,13 +202,13 @@ islx is layered so each framework needs only a thin integration:
 
 | Layer | Package entry | Depends on |
 | --- | --- | --- |
-| Wire format and codec | `@farmjs/islx` | nothing (Web APIs) |
-| Server: values, sealing, action handling | `@farmjs/islx/server` | `@farmjs/islx` |
-| Browser: value store, hydration, navigation | `@farmjs/islx/client` | `@farmjs/islx` |
-| Renderer adapters | `@farmjs/islx/react` (then Preact, Vue, Svelte, Solid) | the renderer |
-| Compiler: `"use client"`, `"use server"`, inline actions | `@farmjs/islx/compiler` | a parser |
-| Bundler plugins | `@farmjs/islx/vite`, `@farmjs/islx/webpack`, `@farmjs/islx/rollup`, `@farmjs/islx/esbuild` | the compiler |
-| Frameworks | `@farmjs/islx/next`, `@farmjs/islx/astro`, `@farmjs/islx/nuxt`, … | the above |
+| Wire format and codec | `@farm.js/islx` | nothing (Web APIs) |
+| Server: values, sealing, action handling | `@farm.js/islx/server` | `@farm.js/islx` |
+| Browser: value store, hydration, navigation | `@farm.js/islx/client` | `@farm.js/islx` |
+| Renderer adapters | `@farm.js/islx/react` (then Preact, Vue, Svelte, Solid) | the renderer |
+| Compiler: `"use client"`, `"use server"`, inline actions | `@farm.js/islx/compiler` | a parser |
+| Bundler plugins | `@farm.js/islx/vite`, `@farm.js/islx/webpack`, `@farm.js/islx/rollup`, `@farm.js/islx/esbuild` | the compiler |
+| Frameworks | `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt`, … | the above |
 
 - **Request handling** is one function on Web `Request` and `Response`, so any server mounts it:
   a Next.js route handler or middleware, a Nitro event handler, Astro middleware, Hono, Express
@@ -216,5 +216,5 @@ islx is layered so each framework needs only a thin integration:
 - **The compiler** is a pure function from source and environment (`server` or `client`) to
   source, with no bundler in it. Each bundler plugin is a few lines around it, and Turbopack uses
   the webpack loader.
-- **Conformance.** `@farmjs/islx/testing` will ship the contract suite: an implementation passes when its
+- **Conformance.** `@farm.js/islx/testing` will ship the contract suite: an implementation passes when its
   fixture app passes it, in development and production.

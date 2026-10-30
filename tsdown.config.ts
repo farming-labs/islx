@@ -17,7 +17,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: true,
-  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@farmjs\/islx/],
+  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@farm\.js\/islx/],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
   },

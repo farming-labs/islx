@@ -245,8 +245,8 @@ function collectExports(
 export function transformActions(options: TransformActionsOptions): TransformActionsResult | null {
   const { code, id, root, environment } = options;
   const salt = options.salt ?? "";
-  const serverRuntime = options.runtime?.server ?? "@farmjs/islx/server";
-  const clientRuntime = options.runtime?.client ?? "@farmjs/islx/client";
+  const serverRuntime = options.runtime?.server ?? "@farm.js/islx/server";
+  const clientRuntime = options.runtime?.client ?? "@farm.js/islx/client";
   const directive = options.directive ?? "use server";
   const moduleDirective = hasModuleDirective(code, directive);
   if (!moduleDirective && !code.includes(directive)) return null;
