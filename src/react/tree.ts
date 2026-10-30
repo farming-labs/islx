@@ -384,19 +384,6 @@ async function resolveElement(
   }
 }
 
-function serializeTreePayload(value: unknown): string {
-  return escapeTreeJson(JSON.stringify(value));
-}
-
-function escapeTreeJson(json: string): string {
-  return json
-    .replace(/&/g, "\\u0026")
-    .replace(/</g, "\\u003c")
-    .replace(/>/g, "\\u003e")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-}
-
 const chunkComponents = /* @__PURE__ */ new WeakMap<
   object,
   React.ComponentType<{ chunk: ResolvedChunk }>

@@ -192,10 +192,12 @@ describe("islands", () => {
     button.click();
     await act(async () => {
       release();
-      await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(islands.rootCount()).toBe(1);
-    expect(document.querySelector("[data-counter=lazy]")!.textContent).toBe("lazy 1");
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+      expect(document.querySelector("[data-counter=lazy]")!.textContent).toBe("lazy 1");
+    });
   });
 
   it("keep an island's state when the page renders again", async () => {
@@ -266,10 +268,11 @@ describe("actions in islands", () => {
     await mount(markup);
     await act(async () => {
       document.querySelector("button")!.click();
-      await vi.waitFor(() => expect(hoisted).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 10));
     });
-    expect(document.querySelector("button")!.textContent).toBe("core:Ada");
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("button")!.textContent).toBe("core:Ada");
+    });
     expect(hoisted).toHaveBeenCalledWith(["core"], "Ada");
   });
 

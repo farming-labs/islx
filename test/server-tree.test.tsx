@@ -9,7 +9,6 @@ import {
   createHydrationRuntime,
   createServerHtml,
   createServerTreeElement,
-  isolateIslands,
   withinClientRoot,
 } from "@farmjs/islx/react/client";
 import { parseHeldValues } from "@farmjs/islx/server";

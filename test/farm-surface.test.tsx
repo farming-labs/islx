@@ -2,7 +2,7 @@
 import { act, useState } from "react";
 import { renderToReadableStream } from "react-dom/server";
 import { parseSync } from "oxc-parser";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PENDING_INTERACTIONS, PREHYDRATION_SCRIPT, getValueStore } from "@farmjs/islx/client";
 import { IslandsProvider, createIsland } from "@farmjs/islx/react";
 import { createHydrationRuntime } from "@farmjs/islx/react/client";
@@ -51,9 +51,12 @@ describe("interactions before the browser entry runs", () => {
       const runtime = createHydrationRuntime({ load: async (src) => modules[src]! });
       await act(async () => {
         await runtime.hydrate(document);
-        await new Promise((resolve) => setTimeout(resolve, 10));
       });
-      expect(button.textContent).toBe(`${strategy} 1`);
+      // The replay runs in a task after hydration: wait for it, not for a set time.
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(button.textContent).toBe(`${strategy} 1`);
+      });
       expect(pending()).toHaveLength(0);
       runtime.dispose(document.body);
     }
