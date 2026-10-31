@@ -36,6 +36,16 @@ const SERVER_HTML_TAG = HTML_ELEMENT;
  */
 export const PAYLOAD_ONLY_ATTRIBUTE = "partial";
 const SERVER_HTML_ATTRIBUTE = "name";
+const OUTLET = Symbol.for("islx.react.outlet");
+
+/**
+ * Where a layout rendered as a server tree places the page (or another outlet, by `name`). The
+ * tree records the outlet, and the server and the browser render what they are given there.
+ */
+export function Outlet(_props: { name?: string }): null {
+  return null;
+}
+(Outlet as unknown as { [OUTLET]: true })[OUTLET] = true;
 
 // The HTML parser moves or drops a custom element placed inside these, so a subtree that needs a
 // `<f-html>` wrapper there is wrapped at the nearest ancestor outside them instead.
@@ -84,6 +94,8 @@ interface TreeResolver {
   component(reference: string, exportName: string): React.ComponentType<any>;
   chunk(id: number): ResolvedChunk;
   serverHtml(id: number, key: React.Key | null): React.ReactElement;
+  /** A layout tree's outlet: where the layout renders the page, or another outlet by name. */
+  outlet(name: string): React.ReactNode;
   /** The function a server action reference stands for. */
   action(id: string, sealed: string | undefined): unknown;
 }
@@ -322,6 +334,10 @@ async function resolveElement(
       return withKey({ $: "p", f: fallback, i: id });
     }
 
+    if (typeof type === "function" && (type as { [OUTLET]?: true })[OUTLET]) {
+      return withKey({ $: "L", n: String(props.name ?? "children") });
+    }
+
     const clientReference = getClientReference(type);
     if (clientReference) {
       const { children, ...rest } = props;
@@ -476,6 +492,8 @@ function createTreeValue(value: TreeValue, resolver: TreeResolver): unknown {
       );
     case "x":
       return resolver.serverHtml(value.i as number, typeof value.k === "string" ? value.k : null);
+    case "L":
+      return resolver.outlet(value.n as string);
     case "n":
       return Number(value.v);
     case "a":
@@ -624,6 +642,40 @@ export interface ServerTreeRenderOptions {
    * streams and the server HTML parts it cannot represent, without the page's rendered HTML.
    */
   payloadOnly?: boolean;
+  /**
+   * A layout rendered as a server tree: what each `<Outlet>` renders, by name. The payload script
+   * then sits at the `children` outlet, inside the layout's markup, so a layout that renders the
+   * whole document keeps it in the body.
+   */
+  outlets?: Record<string, React.ReactNode>;
+  /**
+   * Names this tree's payload, chunks and server HTML parts, so a layout's tree and the trees at
+   * its outlet do not read each other's. A page's tree has none.
+   */
+  scope?: string;
+}
+
+/** The name of a tree part: its number, after the tree's scope. */
+function scopedName(scope: string | undefined, id: number): string {
+  return scope ? `${scope}:${id}` : String(id);
+}
+
+function hasChildrenOutlet(value: TreeValue): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(hasChildrenOutlet);
+  if (value.$ === "L") return value.n === "children";
+  return Object.values(value).some(hasChildrenOutlet);
+}
+
+/** What renders at a layout's outlet: its content, after the layout's payload at `children`. */
+function outletContent(
+  outlets: Record<string, React.ReactNode> | undefined,
+  name: string,
+  script: React.ReactElement | null | undefined,
+): React.ReactNode {
+  const content = outlets?.[name] ?? null;
+  if (name !== "children" || !script) return content;
+  return React.createElement(React.Fragment, null, script, content);
 }
 
 /**
@@ -646,6 +698,7 @@ export async function renderServerTree(
     chunks: new Map(),
     actions: new Map(),
   };
+  const scope = options.scope;
   const tree = await resolveValue(state, element, { parserSensitive: false }, new Set());
   const held = options.held && options.held.size > 0 ? options.held : null;
   const encode = (payload: Record<string, unknown>): { json: string; values: TreeValueScripts } => {
@@ -655,6 +708,8 @@ export async function renderServerTree(
       values: addressed.values.map((value) => [value.key, hook.escape(value.json)] as const),
     };
   };
+  // A layout tree's payload script, rendered at its `children` outlet.
+  let layoutScript: React.ReactElement | null = null;
   const resolver: TreeResolver = {
     component(reference, exportName) {
       const Component = state.components.get(`${reference}#${exportName}`);
@@ -674,7 +729,12 @@ export async function renderServerTree(
               React.Fragment,
               null,
               createTreeValue(encoded, resolver) as React.ReactNode,
-              createTreeScript(CHUNK_SCRIPT_TYPE, String(id), payload.json, payload.values),
+              createTreeScript(
+                CHUNK_SCRIPT_TYPE,
+                scopedName(scope, id),
+                payload.json,
+                payload.values,
+              ),
             );
             chunk.status = "fulfilled";
             return chunk.value;
@@ -695,17 +755,32 @@ export async function renderServerTree(
         SERVER_HTML_TAG,
         {
           ...(key === null ? {} : { key }),
-          [SERVER_HTML_ATTRIBUTE]: String(id),
+          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
           style: { display: "contents" },
         },
         isolate(state.serverHtml.get(id) as React.ReactNode),
       );
+    },
+    outlet(name) {
+      return outletContent(options.outlets, name, layoutScript);
     },
     action(id) {
       return state.actions.get(id);
     },
   };
   const payload = encode({ v: 1, t: tree });
+  if (options.outlets) {
+    const script = createTreeScript(TREE_SCRIPT_TYPE, scope ?? "", payload.json, payload.values);
+    // Decided from the tree itself, as the browser decides it: an outlet inside a streamed chunk
+    // resolves later, so the script follows the layout then.
+    const atOutlet = hasChildrenOutlet(tree);
+    if (atOutlet) layoutScript = script;
+    const layout = createTreeValue(tree, resolver) as React.ReactNode;
+    const content = atOutlet ? layout : React.createElement(React.Fragment, null, layout, script);
+    return React.createElement(function ServerTreeLayout() {
+      return content;
+    });
+  }
   const page =
     (options.payloadOnly && (await createPayloadOnlyPage(state, payload, encode, resolver))) ||
     createTreePage(tree, payload.json, resolver, undefined, payload.values);
@@ -771,17 +846,26 @@ function exportOf(module: Record<string, unknown>, src: string, exportName: stri
   return Component as React.ComponentType<any>;
 }
 
-/**
- * Rebuilds a server-tree page in the browser from its server HTML (an element, or the HTML of a
- * navigation), after loading its client modules. Returns null for a page without a tree.
- */
-export async function createServerTreeElement(
-  source: ParentNode | string,
+interface PreparedTree {
+  payload: TreeValue;
+  json: string;
+  values: TreeValueScripts;
+  components: Map<string, React.ComponentType<any>>;
+  resolver(outlets?: Record<string, React.ReactNode>, script?: React.ReactElement): TreeResolver;
+  hasOutlet: boolean;
+}
+
+/** Reads a tree's payload, chunks and server HTML from `root` and loads its client modules. */
+async function prepareTree(
+  root: ParentNode,
+  scope: string | undefined,
   options: ServerTreeElementOptions,
-): Promise<React.ReactElement | null> {
+): Promise<PreparedTree | null> {
   const values = options.values ?? getValueStore();
-  const root = typeof source === "string" ? parseHtml(source) : source;
-  const script = root.querySelector<HTMLScriptElement>(`script[type="${TREE_SCRIPT_TYPE}"]`);
+  // A page's tree is unnamed; a layout's carries its scope.
+  const script = Array.from(
+    root.querySelectorAll<HTMLScriptElement>(`script[type="${TREE_SCRIPT_TYPE}"]`),
+  ).find((candidate) => (candidate.getAttribute("name") ?? undefined) === scope);
   if (!script) return null;
   const json = script.textContent ?? "";
   // A payload that names values reads them from the page (or this navigation's HTML) and from
@@ -799,13 +883,23 @@ export async function createServerTreeElement(
   const payload = parsePayload(json) as { v?: number; t: TreeValue };
   if (payload.v !== 1) throw new Error("unsupported server tree payload version");
   const scripts = readTreeValueScripts(script);
+  // The number in a part's name, or null for another tree's part.
+  const partId = (name: string | null): number | null => {
+    if (name === null) return null;
+    const prefix = scope === undefined ? "" : `${scope}:`;
+    if (!name.startsWith(prefix)) return null;
+    const id = name.slice(prefix.length);
+    return /^\d+$/.test(id) ? Number(id) : null;
+  };
 
   const chunks = new Map<number, { tree: TreeValue; json: string; values: TreeValueScripts }>();
   for (const chunkScript of root.querySelectorAll<HTMLScriptElement>(
     `script[type="${CHUNK_SCRIPT_TYPE}"]`,
   )) {
+    const id = partId(chunkScript.getAttribute("name"));
+    if (id === null) continue;
     const chunkJson = chunkScript.textContent ?? "";
-    chunks.set(Number(chunkScript.getAttribute("name")), {
+    chunks.set(id, {
       tree: (parsePayload(chunkJson) as { t: TreeValue }).t,
       json: chunkJson,
       values: readTreeValueScripts(chunkScript),
@@ -826,58 +920,103 @@ export async function createServerTreeElement(
 
   const serverHtml = new Map<number, string>();
   for (const container of root.querySelectorAll(`${SERVER_HTML_TAG}[${SERVER_HTML_ATTRIBUTE}]`)) {
-    serverHtml.set(Number(container.getAttribute(SERVER_HTML_ATTRIBUTE)), container.innerHTML);
+    const id = partId(container.getAttribute(SERVER_HTML_ATTRIBUTE));
+    if (id !== null) serverHtml.set(id, container.innerHTML);
   }
 
-  const resolver: TreeResolver = {
-    component(reference, exportName) {
-      const Component = components.get(`${reference}#${exportName}`);
-      if (!Component) throw new Error(`client reference ${reference}#${exportName} was not loaded`);
-      return Component;
-    },
-    chunk(id) {
-      const chunk = chunks.get(id);
-      if (!chunk) throw new Error(`server tree chunk ${id} was not found`);
-      const value = React.createElement(
-        React.Fragment,
-        null,
-        createTreeValue(chunk.tree, resolver) as React.ReactNode,
-        createTreeScript(CHUNK_SCRIPT_TYPE, String(id), chunk.json, chunk.values),
-      );
-      return { status: "fulfilled", value, promise: Promise.resolve(value) };
-    },
-    serverHtml(id, key) {
-      const html = serverHtml.get(id);
-      if (html === undefined) throw new Error(`server HTML ${id} was not found`);
-      return React.createElement(options.ServerHtml, {
-        ...(key === null ? {} : { key }),
-        as: SERVER_HTML_TAG,
-        [SERVER_HTML_ATTRIBUTE]: String(id),
-        style: { display: "contents" },
-        suppressHydrationWarning: true,
-        dangerouslySetInnerHTML: { __html: html },
-      });
-    },
-    action(id, sealed) {
-      return createServerReference(id, sealed);
-    },
+  const resolver = (
+    outlets?: Record<string, React.ReactNode>,
+    outletScript?: React.ReactElement,
+  ): TreeResolver => {
+    const treeResolver: TreeResolver = {
+      component(reference, exportName) {
+        const Component = components.get(`${reference}#${exportName}`);
+        if (!Component)
+          throw new Error(`client reference ${reference}#${exportName} was not loaded`);
+        return Component;
+      },
+      chunk(id) {
+        const chunk = chunks.get(id);
+        if (!chunk) throw new Error(`server tree chunk ${id} was not found`);
+        const value = React.createElement(
+          React.Fragment,
+          null,
+          createTreeValue(chunk.tree, treeResolver) as React.ReactNode,
+          createTreeScript(CHUNK_SCRIPT_TYPE, scopedName(scope, id), chunk.json, chunk.values),
+        );
+        return { status: "fulfilled", value, promise: Promise.resolve(value) };
+      },
+      serverHtml(id, key) {
+        const html = serverHtml.get(id);
+        if (html === undefined) throw new Error(`server HTML ${id} was not found`);
+        return React.createElement(options.ServerHtml, {
+          ...(key === null ? {} : { key }),
+          as: SERVER_HTML_TAG,
+          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
+          style: { display: "contents" },
+          suppressHydrationWarning: true,
+          dangerouslySetInnerHTML: { __html: html },
+        });
+      },
+      outlet(name) {
+        return outletContent(outlets, name, outletScript);
+      },
+      action(id, sealed) {
+        return createServerReference(id, sealed);
+      },
+    };
+    return treeResolver;
   };
 
+  return {
+    payload: payload.t,
+    json,
+    values: scripts,
+    components,
+    resolver,
+    hasOutlet: hasChildrenOutlet(payload.t),
+  };
+}
+
+/** Points a tree's loaded components at a hot-updated module; true when the tree renders it. */
+function updateTreeComponents(
+  components: Map<string, React.ComponentType<any>>,
+  src: string,
+  module: Record<string, unknown>,
+): boolean {
+  let changed = false;
+  for (const key of components.keys()) {
+    const separator = key.lastIndexOf("#");
+    if (key.slice(0, separator) !== src) continue;
+    components.set(key, exportOf(module, src, key.slice(separator + 1)));
+    changed = true;
+  }
+  return changed;
+}
+
+/**
+ * Rebuilds a server-tree page in the browser from its server HTML (an element, or the HTML of a
+ * navigation), after loading its client modules. Returns null for a page without a tree.
+ */
+export async function createServerTreeElement(
+  source: ParentNode | string,
+  options: ServerTreeElementOptions,
+): Promise<React.ReactElement | null> {
+  const root = typeof source === "string" ? parseHtml(source) : source;
+  const prepared = await prepareTree(root, undefined, options);
+  if (!prepared) return null;
+  const tree = prepared;
+  const resolver = tree.resolver();
+
   // Validate the whole tree now, so a missing chunk or module falls back before hydration starts.
-  const build = () => createTreePage(payload.t, json, resolver, undefined, scripts);
+  const build = () => createTreePage(tree.payload, tree.json, resolver, undefined, tree.values);
   build();
 
   function ServerTreePage(): React.ReactNode {
     const [, setVersion] = React.useState(0);
     React.useEffect(() => {
       const listener: TreeUpdateListener = (src, module) => {
-        let changed = false;
-        for (const key of components.keys()) {
-          const separator = key.lastIndexOf("#");
-          if (key.slice(0, separator) !== src) continue;
-          components.set(key, exportOf(module, src, key.slice(separator + 1)));
-          changed = true;
-        }
+        const changed = updateTreeComponents(tree.components, src, module);
         if (changed) setVersion((version) => version + 1);
         return changed;
       };
@@ -894,4 +1033,56 @@ export async function createServerTreeElement(
     ServerTreePage,
     options.key === undefined ? null : { key: options.key },
   );
+}
+
+/** A layout rebuilt from its server tree. */
+export interface ServerTreeLayout {
+  /** The layout around these outlets: plain elements, the same tree the server rendered. */
+  render(outlets: Record<string, React.ReactNode>): React.ReactNode;
+  /** Stops following hot module updates. */
+  dispose(): void;
+}
+
+export interface ServerTreeLayoutOptions extends Omit<ServerTreeElementOptions, "key"> {
+  /** Runs after a hot update to one of the layout's client modules: render the route again. */
+  onUpdate?(): void;
+}
+
+/**
+ * Rebuilds a layout the server rendered with `renderServerTree(..., { outlets, scope })`, from
+ * its server HTML or a navigation's HTML. The layout's own module never reaches the browser: its
+ * client components load from the tree, and `render(outlets)` places the page at its outlet.
+ * Rendering it with the same component types at the same place keeps its client state across
+ * navigations. Returns null when `source` has no tree for `scope`.
+ */
+export async function createServerTreeLayout(
+  source: ParentNode | string,
+  scope: string,
+  options: ServerTreeLayoutOptions,
+): Promise<ServerTreeLayout | null> {
+  const root = typeof source === "string" ? parseHtml(source) : source;
+  const tree = await prepareTree(root, scope, options);
+  if (!tree) return null;
+  // The script the server rendered, at the same place: the `children` outlet, or after the tree.
+  const script = createTreeScript(TREE_SCRIPT_TYPE, scope, tree.json, tree.values);
+  const render = (outlets: Record<string, React.ReactNode>): React.ReactNode => {
+    const resolver = tree.resolver(outlets, tree.hasOutlet ? script : undefined);
+    const layout = createTreeValue(tree.payload, resolver) as React.ReactNode;
+    return tree.hasOutlet ? layout : React.createElement(React.Fragment, null, layout, script);
+  };
+  // Validate the whole tree now, so a missing chunk or module falls back before hydration starts.
+  render({});
+  const listener: TreeUpdateListener = (src, module) => {
+    const changed = updateTreeComponents(tree.components, src, module);
+    if (changed) options.onUpdate?.();
+    return changed;
+  };
+  const listeners = treeListeners();
+  listeners.add(listener);
+  return {
+    render,
+    dispose: () => {
+      listeners.delete(listener);
+    },
+  };
 }
