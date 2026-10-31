@@ -9,10 +9,11 @@ import {
   createHydrationRuntime,
   createServerHtml,
   createServerTreeElement,
+  createServerTreeLayout,
   withinClientRoot,
 } from "@farm.js/islx/react/client";
 import { parseHeldValues } from "@farm.js/islx/server";
-import { renderServerTree } from "@farm.js/islx/react/server";
+import { Outlet, renderServerTree } from "@farm.js/islx/react/server";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -87,7 +88,10 @@ const modules: Record<string, Record<string, unknown>> = {
   "/src/stars.tsx": { Stars: StarsSource },
   "/src/callback.tsx": { Callback: CallbackSource },
   "/src/counter.tsx": { Counter: CounterSource },
+  "/src/panel.tsx": { PanelProvider, HeaderButton },
 };
+const PanelProviderIsland = createIsland(PanelProvider, "/src/panel.tsx", "PanelProvider", "load");
+const HeaderButtonIsland = createIsland(HeaderButton, "/src/panel.tsx", "HeaderButton", "load");
 const PageButton = createIsland(PageButtonSource, "/src/page-button.tsx", "PageButton", "load");
 const Card = createIsland(CardSource, "/src/card.tsx", "Card", "load");
 const Stars = createIsland(StarsSource, "/src/stars.tsx", "Stars", "load");
@@ -573,5 +577,157 @@ describe("server tree pages", () => {
       const html = await new Response(stream).text();
       expect(html).not.toContain('type="f/tree" partial');
     });
+  });
+});
+
+describe("server tree layouts", () => {
+  afterEach(() => {
+    for (const root of mountedRoots.splice(0)) act(() => root.unmount());
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  // A server layout around a client provider: its module stays on the server.
+  async function SlowNote() {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    return <small id="note">LAYOUT_SERVER_VALUE</small>;
+  }
+  function ServerLayout({ children }: { children: ReactNode }) {
+    return (
+      <PanelProviderIsland>
+        <header>
+          <HeaderButtonIsland />
+          <React.Suspense fallback={<i>…</i>}>
+            <SlowNote />
+          </React.Suspense>
+        </header>
+        {children}
+      </PanelProviderIsland>
+    );
+  }
+  async function SlowPage() {
+    return (
+      <React.Suspense fallback={<i>…</i>}>
+        <Highlight />
+        <PageButton label="page" />
+      </React.Suspense>
+    );
+  }
+  const pageRoot = (page: ReactNode) => <div id="page-root">{page}</div>;
+
+  async function renderRoute(
+    layoutElement: ReactNode = (
+      <ServerLayout>
+        <Outlet />
+      </ServerLayout>
+    ),
+  ) {
+    const page = await renderServerTree(<SlowPage />, {});
+    const layout = await renderServerTree(layoutElement, {
+      outlets: { children: pageRoot(page) },
+      scope: "/",
+    });
+    const stream = await renderToReadableStream(withinClientRoot(layout));
+    await stream.allReady;
+    return new Response(stream).text();
+  }
+
+  async function hydrateRoute(html: string) {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.append(container);
+    const { ServerHtml } = createClientRuntime();
+    const layout = await createServerTreeLayout(container, "/", { load, ServerHtml });
+    const page = await createServerTreeElement(container.querySelector("#page-root")!, {
+      load,
+      ServerHtml,
+    });
+    expect(layout).not.toBeNull();
+    const errors: unknown[] = [];
+    let root!: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        withinClientRoot(layout!.render({ children: pageRoot(page) })),
+        {
+          onRecoverableError: (error) => errors.push(error),
+        },
+      );
+    });
+    mountedRoots.push(root);
+    return { container, errors, layout: layout!, root };
+  }
+
+  it("rebuilds the layout from its tree, so the page reads the provider's context", async () => {
+    const html = await renderRoute();
+    expect(html).toContain('<script type="f/tree" name="/">');
+    // Both trees streamed a chunk numbered 0; the layout's is named by its scope.
+    expect(html).toContain('type="f/chunk" name="/:0"');
+    expect(html).toContain('type="f/chunk" name="0"');
+
+    const { container, errors, layout } = await hydrateRoute(html);
+    expect(errors).toEqual([]);
+    expect(container.querySelector("#note")!.textContent).toBe("LAYOUT_SERVER_VALUE");
+    await click(container, "#header");
+    expect(container.querySelector("#page")!.textContent).toBe("page:open");
+    await click(container, "#page");
+    expect(container.querySelector("#header")!.textContent).toBe("closed");
+    layout.dispose();
+  });
+
+  it("keeps the provider's state when the page at its outlet changes", async () => {
+    const { container, layout, root } = await hydrateRoute(await renderRoute());
+    await click(container, "#header");
+    expect(container.querySelector("#header")!.textContent).toBe("open");
+    await act(async () => {
+      root.render(
+        withinClientRoot(layout.render({ children: pageRoot(<p id="next">next page</p>) })),
+      );
+    });
+    expect(container.querySelector("#next")).not.toBeNull();
+    expect(container.querySelector("#header")!.textContent).toBe("open");
+    layout.dispose();
+  });
+
+  it("puts the payload after the layout when it renders no outlet", async () => {
+    const html = await renderRoute(<ServerLayout>{null}</ServerLayout>);
+    expect(html).toMatch(/<\/header><script type="f\/tree" name="\/">/);
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.append(container);
+    const { ServerHtml } = createClientRuntime();
+    const layout = (await createServerTreeLayout(container, "/", { load, ServerHtml }))!;
+    const errors: unknown[] = [];
+    await act(async () => {
+      mountedRoots.push(
+        hydrateRoot(container, withinClientRoot(layout.render({})), {
+          onRecoverableError: (error) => errors.push(error),
+        }),
+      );
+    });
+    expect(errors).toEqual([]);
+    await click(container, "#header");
+    expect(container.querySelector("#header")!.textContent).toBe("open");
+    layout.dispose();
+  });
+
+  it("re-renders through onUpdate when one of its client modules changes", async () => {
+    const container = document.createElement("div");
+    container.innerHTML = await renderRoute();
+    const { ServerHtml } = createClientRuntime();
+    const onUpdate = vi.fn();
+    const layout = (await createServerTreeLayout(container, "/", { load, ServerHtml, onUpdate }))!;
+    const { updateServerTrees } = await import("@farm.js/islx/react/client");
+    expect(updateServerTrees("/src/panel.tsx", modules["/src/panel.tsx"]!)).toBeGreaterThan(0);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    layout.dispose();
+    expect(updateServerTrees("/src/panel.tsx", modules["/src/panel.tsx"]!)).toBe(0);
+  });
+
+  it("returns null when the document has no tree for the layout", async () => {
+    const container = document.createElement("div");
+    container.innerHTML = await renderRoute();
+    const { ServerHtml } = createClientRuntime();
+    expect(await createServerTreeLayout(container, "/docs", { load, ServerHtml })).toBeNull();
   });
 });

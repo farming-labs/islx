@@ -140,4 +140,9 @@ export {
   type ClientReference,
   type IslandRenderState,
 } from "./island";
-export { PAYLOAD_ONLY_ATTRIBUTE, renderServerTree, type ServerTreeRenderOptions } from "./tree";
+export {
+  Outlet,
+  PAYLOAD_ONLY_ATTRIBUTE,
+  renderServerTree,
+  type ServerTreeRenderOptions,
+} from "./tree";
