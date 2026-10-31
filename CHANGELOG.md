@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.2
+
+Streaming and hydration fixes.
+
+- Islands inside Suspense content that streams in after the browser entry has run now hydrate.
+  While the document streams, the runtime watches it: an island hydrates once React moves it out
+  of its hidden staging `<div>`, an island React removes (a replaced fallback) is released, and
+  watching stops once the document is parsed and every staged boundary is revealed. React 19.2
+  can reveal boundaries after parsing ends.
+- Islands that share a value decode it once and share the result. Props and values without tags
+  skip decoding, and decoded objects are built with plain assignment (`__proto__` stays data).
+
 ## 0.0.1
 
 The first release: the islx wire format, server actions, React islands, and the Vite plugin.
