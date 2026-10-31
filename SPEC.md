@@ -32,9 +32,9 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 | `<script type="f/props" for>` | An island's props, as JSON. `for` names the island's `props` id. |
 | `<script type="f/value" name>` | A value sent once. `name` is its key. Written before the first island that uses it. |
 | `<f-slot name>` | Server output passed to an island as children. It stays server HTML; the island renders it in place. |
-| `<script type="f/tree" [partial]>` | A page's server tree, so the browser can rebuild the page inside an existing root without its HTML. `partial` marks a navigation that sent only the tree. |
-| `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). |
-| `<f-html name>` | Server HTML inside a server tree. |
+| `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree. |
+| `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree. |
+| `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
 
 A value script's and props script's JSON escapes `<`, U+2028 and U+2029.
 
@@ -59,6 +59,7 @@ with any other keys is data.
 | `R` | `RegExp` | `[source, flags]` |
 | `Y` | bytes | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name |
 | `p` | a Suspense boundary inside a server tree | |
+| `L` | a layout tree's outlet, where the page renders | `n`: the outlet's name, `children` for the page |
 | `F` | a `FormData` action argument | its index among the call's attachments |
 | `K` | a `Blob` or `File` action argument | its index among the call's attachments |
 
