@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.3
+
+Server layouts as trees.
+
+- A server layout around a client provider renders as a server tree, so a framework no longer
+  ships the layout's module to hydrate it. On the server, `renderServerTree(layout, { outlets,
+  scope })` with `<Outlet />` where the page goes; in the browser, `createServerTreeLayout(source,
+  scope, { load, ServerHtml, onUpdate })` and `layout.render({ children: page })`. Rendering it
+  again with another page keeps the provider's state.
+- A layout's tree names its payload, chunks and server HTML by its scope (`f/chunk name="/:0"`),
+  so it and the page's tree at its outlet never read each other's parts. New tag `L` (outlet).
+
 ## 0.0.2
 
 Streaming and hydration fixes.
