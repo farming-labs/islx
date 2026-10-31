@@ -163,6 +163,12 @@ function reviveUncached(value: object, container: Element): unknown {
   return changed ? revived : value;
 }
 
+/**
+ * React streams Suspense content that resolves late into a hidden `<div id="S:n">`, then moves it
+ * into place. Its islands hydrate once moved, not while staged.
+ */
+const STREAM_STAGING = 'div[hidden][id^="S:"]';
+
 /** The hydration runtime for one page. */
 export function createHydrationRuntime(options: HydrationOptions) {
   const roots = new Map<Element, RootRecord>();
@@ -277,13 +283,15 @@ export function createHydrationRuntime(options: HydrationOptions) {
         scope instanceof Document ? scope : ((scope as Element).ownerDocument ?? document),
       );
     }
+    if (scope instanceof Document) watchStream(scope);
     const candidates = Array.from(scope.querySelectorAll<Element>(ISLAND_SELECTOR));
     if (scope instanceof Element && scope.matches(ISLAND_SELECTOR)) candidates.unshift(scope);
     const islands = candidates.filter(
       (container) =>
         !roots.has(container) &&
         !pending.has(container) &&
-        !container.parentElement?.closest(ISLAND_SELECTOR),
+        !container.parentElement?.closest(ISLAND_SELECTOR) &&
+        !container.closest(STREAM_STAGING),
     );
 
     await Promise.all(
@@ -466,6 +474,39 @@ export function createHydrationRuntime(options: HydrationOptions) {
   }
 
   /** Unmounts the islands inside `scope`, and stops scheduled ones. */
+  /**
+   * A page still streaming: islands in Suspense content that arrives later hydrate as React puts it
+   * in place, and islands React removes (a replaced fallback) are released. Ends once the document
+   * is parsed and React has revealed every staged boundary (it may batch reveals past parsing).
+   */
+  let watching = false;
+  function watchStream(document: Document): void {
+    if (watching || document.readyState !== "loading" || typeof MutationObserver !== "function") {
+      return;
+    }
+    watching = true;
+    const removed = new Set<Node>();
+    let queued = false;
+    const run = () => {
+      queued = false;
+      for (const node of removed) if (!node.isConnected) dispose(node);
+      removed.clear();
+      if (document.readyState !== "loading" && !document.querySelector(STREAM_STAGING)) {
+        observer.disconnect();
+        watching = false;
+      }
+      hydrate(document).catch((error) => report("Hydrating streamed islands failed.", error));
+    };
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.removedNodes) removed.add(node);
+      if (queued) return;
+      queued = true;
+      queueMicrotask(run);
+    });
+    observer.observe(document, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", run, { once: true });
+  }
+
   function dispose(scope: Node): void {
     for (const [container, controller] of pending) {
       if (container === scope || scope.contains(container)) {

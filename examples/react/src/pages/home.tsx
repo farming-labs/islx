@@ -9,6 +9,12 @@ async function Slow() {
   return <p data-testid="slow">streamed in</p>;
 }
 
+// Streams in well after the browser entry has run.
+async function SlowIsland() {
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  return <Counter start={100} label="streamed" />;
+}
+
 export default async function Home() {
   await new Promise((resolve) => setTimeout(resolve, 1));
   return (
@@ -16,6 +22,9 @@ export default async function Home() {
       <h1>islx on Vite</h1>
       <Suspense fallback={<p data-testid="slow">loading</p>}>
         <Slow />
+      </Suspense>
+      <Suspense fallback={<p data-testid="slow-island">loading</p>}>
+        <SlowIsland />
       </Suspense>
       <Counter start={1} label="first" />
       <Counter start={10} label="second" />
