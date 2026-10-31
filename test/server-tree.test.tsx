@@ -724,6 +724,84 @@ describe("server tree layouts", () => {
     expect(updateServerTrees("/src/panel.tsx", modules["/src/panel.tsx"]!)).toBe(0);
   });
 
+  it("hydrates navigation HTML that leaves out the layout's values the browser holds", async () => {
+    const items = Array.from({ length: 40 }, (_, index) => ({
+      id: `nav-${index}`,
+      label: `Entry ${index}`,
+    }));
+    function NavListSource({ items }: { items: Array<{ id: string }> }) {
+      const panel = usePanel();
+      return <p id="nav-list">{`${items.length} ${panel.open ? "open" : "closed"}`}</p>;
+    }
+    modules["/src/nav-list.tsx"] = { NavList: NavListSource };
+    const NavList = createIsland(NavListSource, "/src/nav-list.tsx", "NavList", "load");
+    function ValuesLayout({ children }: { children: ReactNode }) {
+      return (
+        <PanelProviderIsland>
+          <header>
+            <HeaderButtonIsland />
+            <NavList items={items} />
+          </header>
+          <main>{children}</main>
+        </PanelProviderIsland>
+      );
+    }
+    const render = async (held: ReadonlySet<string> | null) => {
+      const layout = await renderServerTree(
+        <ValuesLayout>
+          <Outlet />
+        </ValuesLayout>,
+        {
+          outlets: { children: pageRoot(<p>page</p>) },
+          scope: "/",
+          held,
+        },
+      );
+      const stream = await renderToReadableStream(withinClientRoot(layout));
+      await stream.allReady;
+      return new Response(stream).text();
+    };
+    const hydrate = async (html: string) => {
+      const container = document.createElement("div");
+      container.innerHTML = html;
+      document.body.append(container);
+      const { ServerHtml } = createClientRuntime();
+      const layout = (await createServerTreeLayout(container, "/", {
+        load,
+        ServerHtml,
+        values: getValueStore(),
+      }))!;
+      const errors: unknown[] = [];
+      let root!: ReturnType<typeof hydrateRoot>;
+      await act(async () => {
+        root = hydrateRoot(
+          container,
+          withinClientRoot(layout.render({ children: pageRoot(<p>page</p>) })),
+          { onRecoverableError: (error) => errors.push(error) },
+        );
+      });
+      const text = container.querySelector("#nav-list")!.textContent;
+      act(() => root.unmount());
+      layout.dispose();
+      return { text, errors };
+    };
+
+    const first = await render(null);
+    const keys = [...first.matchAll(/<script type="f\/value" name="([0-9a-z]{14})"/g)].map(
+      (m) => m[1]!,
+    );
+    expect(keys.length).toBeGreaterThan(0);
+    expect((await hydrate(first)).errors).toEqual([]);
+
+    // A navigation names the values it holds; the server leaves them out.
+    const next = await render(new Set(keys));
+    expect(next).not.toContain('type="f/value"');
+    const { text, errors } = await hydrate(next);
+    expect(errors).toEqual([]);
+    expect(text).toBe("40 closed");
+    getValueStore().clear();
+  });
+
   it("returns null when the document has no tree for the layout", async () => {
     const container = document.createElement("div");
     container.innerHTML = await renderRoute();
