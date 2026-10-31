@@ -8,8 +8,11 @@ export {
 export {
   PAYLOAD_ONLY_ATTRIBUTE,
   createServerTreeElement,
+  createServerTreeLayout,
   updateServerTrees,
   type ServerTreeElementOptions,
+  type ServerTreeLayout,
+  type ServerTreeLayoutOptions,
 } from "./tree";
 export { isolateIslands, withinClientRoot } from "./island";
 export {

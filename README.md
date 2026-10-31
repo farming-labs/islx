@@ -180,6 +180,7 @@ A framework that renders pages itself (Farm does) uses the pieces directly inste
 | Render islands in its own render | wrap the page in `<IslandsProvider held={parseHeldValues(request)}>` |
 | A layout that hydrates as one root | `withinClientRoot(layout)`; its server-HTML page: `isolateIslands(page)` |
 | An async page under such a layout | `renderServerTree(page, { held, payloadOnly })` on the server; `createServerTreeElement(source, { load, ServerHtml })` in the browser |
+| A server layout around a client provider, without shipping the layout | `renderServerTree(<Layout><Outlet /></Layout>, { outlets: { children: page }, scope })` on the server; `createServerTreeLayout(source, scope, { load, ServerHtml, onUpdate })` in the browser, then `layout.render({ children: page })` |
 | Hydrate | `createHydrationRuntime({ load, schedule?, wrap?, report? })`, `createServerHtml(runtime)` |
 | Hold early clicks | inline `PREHYDRATION_SCRIPT` in the page |
 | Actions | `handleAction(request, { allowedOrigins, bodySizeLimit, run, mapError, renderFormState })`; `setActionNavigator({ refresh, navigate })` |
