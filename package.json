@@ -1,6 +1,6 @@
 {
   "name": "@farm.js/islx",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A renderer-agnostic wire format for server-rendered islands: typed props, values sent once, server actions, and partial navigations.",
   "keywords": [
     "islands",

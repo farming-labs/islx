@@ -13,7 +13,7 @@ islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mod
 replaces React Server Components' Flight payload. On a 300-page docs app it ships 26% less
 JavaScript, and a client navigation sends 2.5 KB instead of 12 KB.
 
-> Status: 0.0.1, the first release. React and Vite are supported; other renderers and framework
+> Status: 0.0.2. React and Vite are supported; other renderers and framework
 > integrations follow. The wire format is in [SPEC.md](./SPEC.md), changes in
 > [CHANGELOG.md](./CHANGELOG.md).
 
