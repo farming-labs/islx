@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.4
+
+Promise props, and islands in a page that streams after it loaded.
+
+- A server component can pass an unawaited promise to a client component, which reads it with
+  `use()`. The promise travels as `{"$":"T","v":name}`; when it settles, a Suspense boundary after
+  the island writes `<script type="f/promise" name>` with `{"v":value}` (the same codec and values
+  sent once) or `{"e":1}`. A rejection's reason stays on the server. In the browser the prop is a
+  thenable: settled already when its outcome is on the page, so hydration does not suspend, and
+  settled when it streams in otherwise.
+- An island holding a Suspense boundary that is still streaming, after the document has loaded (a
+  framework router that streams navigations), hydrates once React reveals the boundary instead of
+  React rendering it again in the browser (error #419). `endStreamedContent(root)` from
+  `@farm.js/islx/react/client` marks boundaries a stream never completed as rendered in the
+  browser, so their islands hydrate on the next pass.
+
 ## 0.0.3
 
 Server layouts as trees.
