@@ -37,7 +37,7 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 | `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
 | `<script type="f/promise" name>` | The outcome of a promise an island received, written when it settles: `{"v":value}`, or `{"e":1}` for a rejection (the reason stays on the server). `name` is the promise's name. It may land anywhere after the island, and stream in after the island hydrated. |
 
-A value script's and props script's JSON escapes `<`, U+2028 and U+2029.
+A value script's, props script's and promise script's JSON escapes `<`, U+2028 and U+2029.
 
 ## JSON tags
 

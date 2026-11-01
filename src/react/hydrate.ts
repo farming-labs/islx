@@ -186,9 +186,14 @@ const pendingPromises = new Map<
 >();
 let promiseObserver: MutationObserver | null = null;
 
-function findPromiseScript(document: Document, name: string): Element | null {
-  for (const script of document.querySelectorAll(`script[type="${PROMISE_SCRIPT_TYPE}"]`)) {
-    if (script.getAttribute("name") === name) return script;
+// The island's document, then the page: an island read from a parsed response (kept across a
+// refresh) ends up on the page, where its outcome streams in.
+function findPromiseScript(container: Element, name: string): Element | null {
+  const documents = new Set([container.ownerDocument, globalThis.document].filter(Boolean));
+  for (const document of documents) {
+    for (const script of document.querySelectorAll(`script[type="${PROMISE_SCRIPT_TYPE}"]`)) {
+      if (script.getAttribute("name") === name) return script;
+    }
   }
   return null;
 }
@@ -222,8 +227,7 @@ function readOutcome(
 function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
   const pending = pendingPromises.get(name);
   if (pending) return pending.thenable;
-  const document = container.ownerDocument;
-  const script = findPromiseScript(document, name);
+  const script = findPromiseScript(container, name);
   if (script) {
     const outcome = readOutcome(script, container, values);
     const thenable: IslandThenable = outcome.ok
@@ -263,7 +267,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   if (!promiseObserver && typeof MutationObserver === "function") {
     promiseObserver = new MutationObserver(() => {
       for (const [pendingName, entry] of pendingPromises) {
-        const found = findPromiseScript(entry.container.ownerDocument, pendingName);
+        const found = findPromiseScript(entry.container, pendingName);
         if (found) entry.settle(found);
       }
       if (pendingPromises.size === 0) {
@@ -271,7 +275,10 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
         promiseObserver = null;
       }
     });
-    promiseObserver.observe(document, { childList: true, subtree: true });
+    promiseObserver.observe(globalThis.document ?? container.ownerDocument, {
+      childList: true,
+      subtree: true,
+    });
   }
   return thenable;
 }

@@ -393,6 +393,23 @@ describe("promises in islands", () => {
     expect(await received[0]).toEqual(big);
   });
 
+  it("settle on the page for an island kept from a parsed response", async () => {
+    received.length = 0;
+    const islands = await mount(await html(h("main", null, h(KeepsIsland, { value: later(1) }))));
+    const next = await html(h("main", null, h(KeepsIsland, { value: later(2) })));
+    const outcome = /<script type="f\/promise"[^>]*>.*?<\/script>/.exec(next)![0];
+    const parsed = new DOMParser().parseFromString(next.replace(outcome, ""), "text/html");
+    await act(async () => {
+      expect(islands.carryOver(document.body, parsed.body)).toBe(1);
+    });
+    const kept = received.at(-1)!;
+    await act(async () => {
+      document.body.insertAdjacentHTML("beforeend", outcome);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(await kept).toBe(2);
+  });
+
   it("reject in the browser without the server's reason", async () => {
     const reason = new Error("database password is hunter2");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

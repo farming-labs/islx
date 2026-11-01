@@ -24,9 +24,11 @@ import {
 } from "../server/values";
 import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
 
-// Promise names are unique across this server's renders, so a page that keeps islands from an
-// earlier response never has two promises of one name.
-const PROMISE_PREFIX = `${Math.random().toString(36).slice(2, 8)}.`;
+// Promise names are unique across renders and server instances, so a page that keeps islands from
+// an earlier response never has two promises of one name.
+const PROMISE_PREFIX = `${Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+  part.toString(36),
+).join("")}.`;
 let promiseCount = 0;
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
