@@ -188,14 +188,16 @@ function awaitsStreamedContent(container: Element): boolean {
 
 /**
  * Marks the Suspense boundaries under `root` that still wait once their stream has ended (the
- * connection dropped) as rendered in the browser, as React does when it finds one: their islands
- * then hydrate. Call it when a stream that filled `root` ends.
+ * connection dropped) as rendered in the browser, as React does when it finds one: the next
+ * `hydrate()` pass starts their islands. Call it when a stream that filled `root` ends.
  */
 export function endStreamedContent(root: ParentNode): void {
-  const document = root instanceof Document ? root : (root as Node).ownerDocument!;
-  const walker = document.createTreeWalker(root as Node, NodeFilter.SHOW_COMMENT);
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if ((node as Comment).data === PENDING_BOUNDARY) (node as Comment).data = "$!";
+  // A document from another window is not `instanceof Document` here.
+  const node = root as Node;
+  const document = node.nodeType === 9 ? (node as Document) : node.ownerDocument!;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT);
+  for (let comment = walker.nextNode(); comment; comment = walker.nextNode()) {
+    if ((comment as Comment).data === PENDING_BOUNDARY) (comment as Comment).data = "$!";
   }
 }
 
