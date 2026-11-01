@@ -1,8 +1,20 @@
 // @vitest-environment jsdom
-import { act, createElement as h, useActionState, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  act,
+  createElement as h,
+  use,
+  useActionState,
+  useState,
+  type ReactNode,
+} from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIsland } from "@farm.js/islx/react";
-import { createHydrationRuntime, scheduleHydration } from "@farm.js/islx/react/client";
+import {
+  createHydrationRuntime,
+  endStreamedContent,
+  scheduleHydration,
+} from "@farm.js/islx/react/client";
 import { renderToStream } from "@farm.js/islx/react/server";
 import { getValueStore } from "@farm.js/islx/client";
 import {
@@ -66,8 +78,26 @@ function Outer() {
   return h("div", null, h(InnerIsland));
 }
 
+// Suspends while the server renders, until `gate` opens; the browser has the text already.
+let gate: Promise<void> = Promise.resolve();
+let serverRendering = false;
+function Late() {
+  if (serverRendering) use(gate);
+  return h("q", null, "streamed");
+}
+function Waits() {
+  const [likes, setLikes] = useState(0);
+  return h(
+    "div",
+    null,
+    h(Suspense, { fallback: h("i", null, "loading") }, h(Late)),
+    h("button", { "data-like": "", onClick: () => setLikes(likes + 1) }, `likes ${likes}`),
+  );
+}
+
 const modules: Record<string, Record<string, unknown>> = {
   "/src/counter.tsx": { Counter },
+  "/src/waits.tsx": { Waits },
   "/src/shows.tsx": { Shows },
   "/src/panel.tsx": { Panel },
   "/src/outer.tsx": { Outer },
@@ -76,6 +106,7 @@ const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
+const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
 
 function runtime(extra: Partial<Parameters<typeof createHydrationRuntime>[0]> = {}) {
   return createHydrationRuntime({
@@ -292,6 +323,73 @@ const SeenTreeIsland = createIsland(
   "/src/seen.tsx",
   "SeenTree",
 );
+
+describe("islands in a page that streams after it loaded (a navigation)", () => {
+  // The island's shell, with its Suspense boundary still waiting, and the rest of the stream.
+  async function shell() {
+    let open!: () => void;
+    gate = new Promise<void>((resolve) => (open = resolve));
+    serverRendering = true;
+    const stream = await renderToStream(h("main", null, h(WaitsIsland)));
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    const first = decoder.decode((await reader.read()).value);
+    open();
+    let rest = "";
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+      rest += decoder.decode(chunk.value);
+    }
+    serverRendering = false;
+    return { first, rest };
+  }
+
+  it("hydrate an island once React reveals its streamed Suspense content", async () => {
+    const { first, rest } = await shell();
+    expect(first).toContain("<!--$?-->");
+    const errors = spyErrors();
+    const islands = await mount(first);
+    expect(islands.rootCount()).toBe(0);
+    await act(async () => {
+      // jsdom runs no scripts from innerHTML: reveal the content as React's $RC does.
+      const staged = document.createElement("div");
+      staged.innerHTML = rest;
+      document.body.append(staged);
+      const template = document.querySelector("template[id^='B:']")!;
+      const content = staged.querySelector("div[hidden][id^='S:']")!;
+      const start = template.previousSibling as Comment;
+      let node = template.nextSibling;
+      while (node && !(node.nodeType === 8 && (node as Comment).data === "/$")) {
+        const next = node.nextSibling;
+        node.remove();
+        node = next;
+      }
+      template.remove();
+      while (content.firstChild) node!.parentNode!.insertBefore(content.firstChild, node);
+      staged.remove();
+      start.data = "$";
+      await islands.hydrate(document);
+    });
+    expect(errors()).toEqual([]);
+    expect(islands.rootCount()).toBe(1);
+    const like = document.querySelector<HTMLButtonElement>("[data-like]")!;
+    await act(async () => like.click());
+    expect(like.textContent).toBe("likes 1");
+    expect(document.querySelector("q")!.textContent).toBe("streamed");
+  });
+
+  it("hydrate an island whose streamed content never came, rendering it in the browser", async () => {
+    const { first } = await shell();
+    const islands = await mount(first);
+    expect(islands.rootCount()).toBe(0);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await act(async () => {
+      endStreamedContent(document);
+      await islands.hydrate(document);
+    });
+    expect(islands.rootCount()).toBe(1);
+    expect(document.querySelector("q")!.textContent).toBe("streamed");
+  });
+});
 
 describe("actions in islands", () => {
   it("arrive as functions that call the server with their sealed values", async () => {
