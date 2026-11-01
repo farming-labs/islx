@@ -169,6 +169,38 @@ function reviveUncached(value: object, container: Element): unknown {
  */
 const STREAM_STAGING = 'div[hidden][id^="S:"]';
 
+const PENDING_BOUNDARY = "$?";
+
+/**
+ * Whether React still streams Suspense content into `container`. React waits for such a boundary
+ * only while the document loads; later (a navigation that streams) it would render it again in
+ * the browser, so the island hydrates once React has revealed it.
+ */
+function awaitsStreamedContent(container: Element): boolean {
+  const document = container.ownerDocument;
+  if (document.readyState === "loading") return false;
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_COMMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if ((node as Comment).data === PENDING_BOUNDARY) return true;
+  }
+  return false;
+}
+
+/**
+ * Marks the Suspense boundaries under `root` that still wait once their stream has ended (the
+ * connection dropped) as rendered in the browser, as React does when it finds one: the next
+ * `hydrate()` pass starts their islands. Call it when a stream that filled `root` ends.
+ */
+export function endStreamedContent(root: ParentNode): void {
+  // A document from another window is not `instanceof Document` here.
+  const node = root as Node;
+  const document = node.nodeType === 9 ? (node as Document) : node.ownerDocument!;
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_COMMENT);
+  for (let comment = walker.nextNode(); comment; comment = walker.nextNode()) {
+    if ((comment as Comment).data === PENDING_BOUNDARY) (comment as Comment).data = "$!";
+  }
+}
+
 /** The hydration runtime for one page. */
 export function createHydrationRuntime(options: HydrationOptions) {
   const roots = new Map<Element, RootRecord>();
@@ -291,7 +323,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
         !roots.has(container) &&
         !pending.has(container) &&
         !container.parentElement?.closest(ISLAND_SELECTOR) &&
-        !container.closest(STREAM_STAGING),
+        !container.closest(STREAM_STAGING) &&
+        !awaitsStreamedContent(container),
     );
 
     await Promise.all(
@@ -494,6 +527,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
       if (document.readyState !== "loading" && !document.querySelector(STREAM_STAGING)) {
         observer.disconnect();
         watching = false;
+        endStreamedContent(document);
       }
       hydrate(document).catch((error) => report("Hydrating streamed islands failed.", error));
     };

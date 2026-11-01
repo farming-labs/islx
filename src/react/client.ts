@@ -2,6 +2,7 @@
 export {
   createHydrationRuntime,
   createServerHtml,
+  endStreamedContent,
   type HydrationOptions,
   type HydrationRuntime,
 } from "./hydrate";

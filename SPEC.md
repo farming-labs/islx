@@ -102,6 +102,13 @@ islands, and handles history, scroll and focus. Anything unusual loads the page 
 site, `target`, `download`, `rel="external"`, modifier keys, a non-HTML answer, or a page whose
 browser entry differs, as after a deploy).
 
+A framework router may stream a navigation in: the shell first, then each Suspense boundary as
+it completes. A renderer may hydrate a boundary that is still streaming only while the document
+loads, so after that an island holding one waits, and the next hydration pass starts it once the
+boundary is revealed. When the stream ends, boundaries it never completed are marked as rendered
+in the browser, and the next pass hydrates their islands (React: a pending boundary is
+`<!--$?-->`, marked `<!--$!-->` by `endStreamedContent(root)` from `@farm.js/islx/react/client`).
+
 A server that leaves layouts out renders each kept layout as an empty boundary, and the browser
 keeps its own. If the response does not fit what is on screen, the browser loads the full
 document. All three headers make a response private, and the server sends `Vary` for each one
