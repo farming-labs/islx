@@ -95,9 +95,29 @@ function Waits() {
   );
 }
 
+function QuoteText({ quote }: { quote: Promise<{ text: string }> }) {
+  return h("q", null, use(quote).text);
+}
+function Quote({ quote }: { quote: Promise<{ text: string }> }) {
+  const [likes, setLikes] = useState(0);
+  return h(
+    "div",
+    null,
+    h(Suspense, { fallback: h("i", null, "loading") }, h(QuoteText, { quote })),
+    h("button", { "data-like": "", onClick: () => setLikes(likes + 1) }, `likes ${likes}`),
+  );
+}
+const received: Array<Promise<unknown>> = [];
+function Keeps({ value }: { value: Promise<unknown> }) {
+  received.push(value);
+  return h("span", null, "kept");
+}
+
 const modules: Record<string, Record<string, unknown>> = {
   "/src/counter.tsx": { Counter },
   "/src/waits.tsx": { Waits },
+  "/src/quote.tsx": { Quote },
+  "/src/keeps.tsx": { Keeps },
   "/src/shows.tsx": { Shows },
   "/src/panel.tsx": { Panel },
   "/src/outer.tsx": { Outer },
@@ -107,6 +127,8 @@ const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
+const QuoteIsland = createIsland(Quote, "/src/quote.tsx", "Quote");
+const KeepsIsland = createIsland(Keeps, "/src/keeps.tsx", "Keeps");
 
 function runtime(extra: Partial<Parameters<typeof createHydrationRuntime>[0]> = {}) {
   return createHydrationRuntime({
@@ -323,6 +345,68 @@ const SeenTreeIsland = createIsland(
   "/src/seen.tsx",
   "SeenTree",
 );
+
+describe("promises in islands", () => {
+  const later = <T>(value: T, ms = 10) =>
+    new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+  it("arrive settled when their outcome is on the page, so hydration does not suspend", async () => {
+    const markup = await html(h(QuoteIsland, { quote: later({ text: "ship it" }) }));
+    expect(markup).toMatch(/\{"quote":\{"\$":"T","v":"[^"]+"\}\}/);
+    expect(markup).toMatch(
+      /<script type="f\/promise" name="[^"]+">\{"v":\{"text":"ship it"\}\}<\/script>/,
+    );
+    const errors = spyErrors();
+    await mount(markup);
+    expect(errors()).toEqual([]);
+    expect(document.querySelector("q")!.textContent).toBe("ship it");
+    const like = document.querySelector<HTMLButtonElement>("[data-like]")!;
+    await act(async () => like.click());
+    expect(like.textContent).toBe("likes 1");
+  });
+
+  it("settle when their outcome streams in after the island hydrated", async () => {
+    const markup = await html(h(QuoteIsland, { quote: later({ text: "late" }) }));
+    const outcome = /<script type="f\/promise"[^>]*>.*?<\/script>/.exec(markup)![0];
+    const errors = spyErrors();
+    await mount(markup.replace(outcome, ""));
+    expect(document.querySelector("f-island")!.hasAttribute("hydrated")).toBe(true);
+    const like = document.querySelector<HTMLButtonElement>("[data-like]")!;
+    await act(async () => like.click());
+    expect(like.textContent).toBe("likes 1");
+    await act(async () => {
+      const staged = document.createElement("div");
+      staged.hidden = true;
+      staged.innerHTML = outcome;
+      document.body.append(staged);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(errors()).toEqual([]);
+    expect(document.querySelector("q")!.textContent).toBe("late");
+    expect(like.textContent).toBe("likes 1");
+  });
+
+  it("send the values their outcome holds", async () => {
+    const big = { rows: Array.from({ length: 80 }, (_, row) => ({ row, label: `row ${row}` })) };
+    received.length = 0;
+    await mount(await html(h(KeepsIsland, { value: later(big) })));
+    expect(await received[0]).toEqual(big);
+  });
+
+  it("reject in the browser without the server's reason", async () => {
+    const reason = new Error("database password is hunter2");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const markup = await html(
+      h(KeepsIsland, { value: Promise.reject(reason).finally(() => undefined) }),
+    );
+    expect(markup).not.toContain("hunter2");
+    expect(markup).toContain('{"e":1}');
+    expect(errors.mock.calls.some((call) => call.includes(reason))).toBe(true);
+    received.length = 0;
+    await mount(markup);
+    await expect(received[0]).rejects.toThrow("rejected on the server");
+  });
+});
 
 describe("islands in a page that streams after it loaded (a navigation)", () => {
   // The island's shell, with its Suspense boundary still waiting, and the rest of the stream.

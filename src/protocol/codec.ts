@@ -21,6 +21,7 @@ import {
   BLOB_TAG,
   FORM_DATA_TAG,
   OBJECT_TAG,
+  PROMISE_TAG,
   REFERENCE_TAG,
   SLOT_TAG,
   TAG,
@@ -152,6 +153,7 @@ export function decodeTagged(
     case ACTION_TAG:
     case FORM_DATA_TAG:
     case BLOB_TAG:
+    case PROMISE_TAG:
       return NOT_A_VALUE;
     case OBJECT_TAG:
       if (data && typeof data === "object" && !Array.isArray(data)) {

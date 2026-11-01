@@ -73,6 +73,8 @@ describe("codec", () => {
     expect(() => decode({ $: "a", v: "some-action" })).toThrow("not allowed");
     expect(() => decode({ $: "a", v: "some-action", b: "sealed" })).toThrow("not allowed");
     expect(() => decode({ $: "r", v: "04jiw29097x8ki" })).toThrow("not allowed");
+    // A promise only travels from the server to an island, never in an action's arguments.
+    expect(() => decode({ $: "T", v: "x.0" })).toThrow("not allowed");
     expect(decodeTagged({ $: "r", v: "x" }, (value) => value)).toBe(NOT_A_VALUE);
   });
 

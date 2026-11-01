@@ -25,6 +25,11 @@ export const TREE_SCRIPT_TYPE = "f/tree";
 export const CHUNK_SCRIPT_TYPE = "f/chunk";
 /** The element around server HTML inside a server tree. */
 export const HTML_ELEMENT = "f-html";
+/**
+ * The script type of a promise's outcome, written when it settles: `{"v":value}`, or `{"e":1}` for
+ * a rejection. Its `name` attribute names the promise.
+ */
+export const PROMISE_SCRIPT_TYPE = "f/promise";
 /** The script type of React's form state after a `useActionState` form post, for hydration. */
 export const FORM_STATE_SCRIPT_TYPE = "f/form-state";
 
@@ -41,6 +46,11 @@ export const REFERENCE_TAG = "r";
 export const SLOT_TAG = "s";
 /** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
 export const ACTION_TAG = "a";
+/**
+ * `{"$":"T","v":name}`: a promise an island receives, settled by the `f/promise` script `name`.
+ * (Inside a server tree, `{"$":"P","v":value}` is a promise that resolved already.)
+ */
+export const PROMISE_TAG = "T";
 /** `{"$":"o","v":{…}}`: app data that has its own `$` key. */
 export const OBJECT_TAG = "o";
 /** `{"$":"F","v":n}`: a `FormData` argument, sent as fields of a multipart call. */
