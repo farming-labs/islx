@@ -5,7 +5,13 @@
 import * as React from "react";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
 import { encode } from "../protocol/codec";
-import { FORM_STATE_SCRIPT_TYPE, RENDER_HEADER } from "../protocol/wire";
+import {
+  FORM_STATE_SCRIPT_TYPE,
+  PROMISE_TAG,
+  RENDER_HEADER,
+  TAG,
+  TAG_VALUE,
+} from "../protocol/wire";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
@@ -18,11 +24,32 @@ import {
 } from "../server/values";
 import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
 
+// Promise names are unique across renders and server instances, so a page that keeps islands from
+// an earlier response never has two promises of one name.
+const PROMISE_PREFIX = `${Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+  part.toString(36),
+).join("")}.`;
+let promiseCount = 0;
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 setIslandServerHook({
   encode(props, held) {
+    const promises: Array<{ name: string; promise: PromiseLike<unknown> }> = [];
     const addressed = addressValues(props, {
       encodeSpecial: (value) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        if (isThenable(value)) {
+          const name = PROMISE_PREFIX + (promiseCount++).toString(36);
+          promises.push({ name, promise: value });
+          return { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
+        }
         if (typeof value === "function") {
           const reference = encodeActionReference(value);
           if (reference) return reference;
@@ -37,6 +64,7 @@ setIslandServerHook({
     return {
       json: addressed.json,
       values: selectValuesToSend(addressed, held).map(({ key, json }) => ({ key, json })),
+      promises,
     };
   },
   escape: escapeScriptJson,

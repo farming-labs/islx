@@ -14,6 +14,7 @@ import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
 import {
   ISLAND_ELEMENT,
+  PROMISE_SCRIPT_TYPE,
   PROPS_SCRIPT_TYPE,
   SLOT_ELEMENT,
   SLOT_TAG,
@@ -28,7 +29,12 @@ export interface IslandServerHook {
   encode(
     props: Record<string, unknown>,
     skip: ReadonlySet<string> | null,
-  ): { json: string; values: Array<{ key: string; json: string }> };
+  ): {
+    json: string;
+    values: Array<{ key: string; json: string }>;
+    /** The promises in the props, by the name the JSON gives them. */
+    promises: Array<{ name: string; promise: PromiseLike<unknown> }>;
+  };
   /** A value's JSON, safe in a script element. */
   escape(json: string): string;
   /** JSON that already carries its tags (a server tree's payload), with large values addressed. */
@@ -209,6 +215,93 @@ function splitSlots(
 
 const warned = new Set<string>();
 
+type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
+// One settled promise per promise, so React's retries read the same one.
+const outcomes = new WeakMap<object, Promise<Outcome>>();
+
+function settle(promise: PromiseLike<unknown>): Promise<Outcome> {
+  let outcome = outcomes.get(promise);
+  if (!outcome) {
+    outcome = Promise.resolve(promise).then(
+      (value): Outcome => ({ ok: true, value }),
+      (reason): Outcome => ({ ok: false, reason }),
+    );
+    outcomes.set(promise, outcome);
+  }
+  return outcome;
+}
+
+const REJECTED = '{"e":1}';
+
+/** Each promise an island received, in a boundary of its own: its outcome once it settles. */
+function promiseBoundaries(
+  promises: ReturnType<IslandServerHook["encode"]>["promises"],
+  label: string,
+): React.ReactNode[] {
+  return promises.map(({ name, promise }) =>
+    React.createElement(
+      React.Suspense,
+      { key: name, fallback: null },
+      React.createElement(IslandPromise, { name, promise, label }),
+    ),
+  );
+}
+
+/**
+ * A promise's outcome, written when it settles. Its values are sent whether or not the page wrote
+ * them already: this script may land before an earlier island's, wherever React puts it.
+ */
+function IslandPromise({
+  name,
+  promise,
+  label,
+}: {
+  name: string;
+  promise: PromiseLike<unknown>;
+  label: string;
+}) {
+  const outcome = React.use(settle(promise));
+  const state = React.useContext(getContexts().render) ?? resolveRenderState();
+  const hook = getIslandServerHook()!;
+  let encoded: ReturnType<IslandServerHook["encode"]> = {
+    json: REJECTED,
+    values: [],
+    promises: [],
+  };
+  if (outcome.ok) {
+    try {
+      encoded = hook.encode({ v: outcome.value }, state?.held ?? null);
+    } catch (error) {
+      console.warn(
+        `[islx] A promise passed to ${label} resolved to a value that cannot be sent to the browser: it rejects there.`,
+        error,
+      );
+    }
+  } else {
+    // The browser gets no details: the reason may hold server data.
+    console.error(`[islx] A promise passed to ${label} rejected.`, outcome.reason);
+  }
+  return React.createElement(
+    React.Fragment,
+    null,
+    ...encoded.values.map((value) =>
+      React.createElement("script", {
+        key: value.key,
+        type: VALUE_SCRIPT_TYPE,
+        name: value.key,
+        dangerouslySetInnerHTML: { __html: hook.escape(value.json) },
+      }),
+    ),
+    React.createElement("script", {
+      key: "outcome",
+      type: PROMISE_SCRIPT_TYPE,
+      name,
+      dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
+    }),
+    ...promiseBoundaries(encoded.promises, label),
+  );
+}
+
 function isThenable(value: unknown): boolean {
   return !!value && typeof (value as { then?: unknown }).then === "function";
 }
@@ -291,6 +384,7 @@ export function createIsland<P extends object>(
         htmlFor: id,
         dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
       }),
+      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`),
     );
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;

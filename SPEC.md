@@ -35,8 +35,9 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 | `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree. |
 | `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree. |
 | `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
+| `<script type="f/promise" name>` | The outcome of a promise an island received, written when it settles: `{"v":value}`, or `{"e":1}` for a rejection (the reason stays on the server). `name` is the promise's name. It may land anywhere after the island, and stream in after the island hydrated. |
 
-A value script's and props script's JSON escapes `<`, U+2028 and U+2029.
+A value script's, props script's and promise script's JSON escapes `<`, U+2028 and U+2029.
 
 ## JSON tags
 
@@ -58,6 +59,8 @@ with any other keys is data.
 | `U` | `URL` | `href` |
 | `R` | `RegExp` | `[source, flags]` |
 | `Y` | bytes | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name |
+| `T` | a promise an island receives | its name; its outcome arrives in the `f/promise` script of that name |
+| `P` | a promise inside a server tree, resolved already | its value, tagged |
 | `p` | a Suspense boundary inside a server tree | |
 | `L` | a layout tree's outlet, where the page renders | `n`: the outlet's name, `children` for the page |
 | `F` | a `FormData` action argument | its index among the call's attachments |

@@ -15,6 +15,8 @@ import {
   HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
   ISLAND_ELEMENT,
+  PROMISE_SCRIPT_TYPE,
+  PROMISE_TAG,
   PROPS_SCRIPT_TYPE,
   REFERENCE_TAG,
   SLOT_ELEMENT,
@@ -101,23 +103,23 @@ const revivedValues = new WeakMap<object, unknown>();
 let slotsRevived = 0;
 
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
-function revive(value: unknown, container: Element): unknown {
+function revive(value: unknown, container: Element, values: ValueStore): unknown {
   if (value && typeof value === "object") {
     const cached = revivedValues.get(value);
     if (cached !== undefined) return cached;
     const slotsBefore = slotsRevived;
-    const revived = reviveUncached(value, container);
+    const revived = reviveUncached(value, container, values);
     if (slotsRevived === slotsBefore) revivedValues.set(value, revived);
     return revived;
   }
   return value;
 }
 
-function reviveUncached(value: object, container: Element): unknown {
+function reviveUncached(value: object, container: Element, values: ValueStore): unknown {
   if (Array.isArray(value)) {
     let changed = false;
     const revived = value.map((entry) => {
-      const next = revive(entry, container);
+      const next = revive(entry, container, values);
       if (next !== entry) changed = true;
       return next;
     });
@@ -147,20 +149,138 @@ function reviveUncached(value: object, container: Element): unknown {
       dangerouslySetInnerHTML: { __html: html },
     });
   }
+  if (tag === PROMISE_TAG && typeof object[TAG_VALUE] === "string") {
+    return islandPromise(object[TAG_VALUE], container, values);
+  }
   if (tag === REFERENCE_TAG)
     throw new Error(`islx value ${String(object[TAG_VALUE])} was not resolved`);
   if (tag !== undefined) {
-    const decoded = decodeTagged(object, (child) => revive(child, container));
+    const decoded = decodeTagged(object, (child) => revive(child, container, values));
     if (decoded !== NOT_A_VALUE) return decoded;
   }
   let changed = false;
   const revived: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(object)) {
-    const next = revive(entry, container);
+    const next = revive(entry, container, values);
     setOwn(revived, key, next);
     if (next !== entry) changed = true;
   }
   return changed ? revived : value;
+}
+
+type IslandThenable = Promise<unknown> & {
+  status?: "pending" | "fulfilled" | "rejected";
+  value?: unknown;
+  reason?: unknown;
+};
+
+// Promises whose outcome has not arrived, by name; one observer watches the page for them.
+const pendingPromises = new Map<
+  string,
+  {
+    thenable: IslandThenable;
+    container: Element;
+    values: ValueStore;
+    settle(script: Element): void;
+  }
+>();
+let promiseObserver: MutationObserver | null = null;
+
+// The island's document, then the page: an island read from a parsed response (kept across a
+// refresh) ends up on the page, where its outcome streams in.
+function findPromiseScript(container: Element, name: string): Element | null {
+  const documents = new Set([container.ownerDocument, globalThis.document].filter(Boolean));
+  for (const document of documents) {
+    for (const script of document.querySelectorAll(`script[type="${PROMISE_SCRIPT_TYPE}"]`)) {
+      if (script.getAttribute("name") === name) return script;
+    }
+  }
+  return null;
+}
+
+function readOutcome(
+  script: Element,
+  container: Element,
+  values: ValueStore,
+): { ok: true; value: unknown } | { ok: false; reason: unknown } {
+  try {
+    const text = script.textContent || "{}";
+    let parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || !("v" in parsed)) {
+      return { ok: false, reason: new Error("islx: the promise rejected on the server") };
+    }
+    if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
+      values.ingest(container.ownerDocument);
+      parsed = values.resolve(parsed);
+    }
+    return { ok: true, value: (revive(parsed, container, values) as { v: unknown }).v };
+  } catch (reason) {
+    return { ok: false, reason };
+  }
+}
+
+/**
+ * The promise an island received, as a thenable React's `use` reads: settled already when its
+ * outcome is on the page, so hydration does not suspend, and settled when the outcome streams in
+ * otherwise.
+ */
+function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
+  const pending = pendingPromises.get(name);
+  if (pending) return pending.thenable;
+  const script = findPromiseScript(container, name);
+  if (script) {
+    const outcome = readOutcome(script, container, values);
+    const thenable: IslandThenable = outcome.ok
+      ? Promise.resolve(outcome.value)
+      : Promise.reject(outcome.reason);
+    if (outcome.ok) Object.assign(thenable, { status: "fulfilled", value: outcome.value });
+    else {
+      thenable.catch(() => {});
+      Object.assign(thenable, { status: "rejected", reason: outcome.reason });
+    }
+    return thenable;
+  }
+  let resolve!: (value: unknown) => void;
+  let reject!: (reason: unknown) => void;
+  const thenable: IslandThenable = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  thenable.catch(() => {});
+  thenable.status = "pending";
+  pendingPromises.set(name, {
+    thenable,
+    container,
+    values,
+    settle(found) {
+      pendingPromises.delete(name);
+      const outcome = readOutcome(found, container, values);
+      if (outcome.ok) {
+        Object.assign(thenable, { status: "fulfilled", value: outcome.value });
+        resolve(outcome.value);
+      } else {
+        Object.assign(thenable, { status: "rejected", reason: outcome.reason });
+        reject(outcome.reason);
+      }
+    },
+  });
+  if (!promiseObserver && typeof MutationObserver === "function") {
+    promiseObserver = new MutationObserver(() => {
+      for (const [pendingName, entry] of pendingPromises) {
+        const found = findPromiseScript(entry.container, pendingName);
+        if (found) entry.settle(found);
+      }
+      if (pendingPromises.size === 0) {
+        promiseObserver?.disconnect();
+        promiseObserver = null;
+      }
+    });
+    promiseObserver.observe(globalThis.document ?? container.ownerDocument, {
+      childList: true,
+      subtree: true,
+    });
+  }
+  return thenable;
 }
 
 /**
@@ -297,7 +417,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);
     }
-    return revive(parsed, container) as Record<string, unknown>;
+    return revive(parsed, container, values) as Record<string, unknown>;
   }
 
   const topLevel = (scope: ParentNode) =>
@@ -542,6 +662,14 @@ export function createHydrationRuntime(options: HydrationOptions) {
   }
 
   function dispose(scope: Node): void {
+    // A promise of an island that left the page no longer waits for its outcome.
+    for (const [name, entry] of pendingPromises) {
+      if (scope.contains(entry.container)) pendingPromises.delete(name);
+    }
+    if (pendingPromises.size === 0) {
+      promiseObserver?.disconnect();
+      promiseObserver = null;
+    }
     for (const [container, controller] of pending) {
       if (container === scope || scope.contains(container)) {
         controller.abort();
