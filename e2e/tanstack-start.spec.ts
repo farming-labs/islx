@@ -30,9 +30,9 @@ test.describe("TanStack Start", () => {
     // The router is not dehydrated: no loader data or manifest for a browser that never runs it.
     expect(html).not.toContain("$_TSR");
 
-    const scripts: string[] = [];
-    page.on("response", async (response) => {
-      if (response.request().resourceType() === "script") scripts.push(await response.text());
+    const scripts: Array<Promise<string>> = [];
+    page.on("response", (response) => {
+      if (response.request().resourceType() === "script") scripts.push(response.text());
     });
     const errors = collectErrors(page);
     await page.goto("/");
@@ -40,7 +40,7 @@ test.describe("TanStack Start", () => {
     const counter = page.getByRole("button", { name: /^Home: / });
     await counter.click();
     await expect(counter).toHaveText("Home: 3");
-    for (const script of scripts) {
+    for (const script of await Promise.all(scripts)) {
       expect(script).not.toContain("rendered-on-the-server-only");
       expect(script).not.toContain("useLoaderData");
     }
@@ -102,8 +102,12 @@ test.describe("TanStack Start", () => {
     await hydrated(page);
     await page.getByRole("button", { name: "Server time" }).click();
     await expect(page.getByTestId("time")).toHaveText("2026-11-01T12:00:00.000Z");
+    const likes = page.getByTestId("likes");
     await page.getByRole("button", { name: "Like twice" }).click();
-    await expect(page.getByTestId("likes")).toHaveText(/^\d+$/);
+    await expect(likes).toHaveText(/^\d+$/);
+    const first = Number(await likes.textContent());
+    await page.getByRole("button", { name: "Like twice" }).click();
+    await expect(likes).toHaveText(String(first + 2));
     expect(errors).toEqual([]);
   });
 });

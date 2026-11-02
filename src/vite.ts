@@ -61,7 +61,8 @@ export interface IslxOptions {
 }
 
 const RUNTIME_ID = "virtual:islx/runtime";
-const ENTRY_ID = "virtual:islx/client-entry";
+/** @internal The browser entry, for a framework whose own entry imports it. */
+export const ENTRY_ID = "virtual:islx/client-entry";
 const CLIENT_HOOKS_ID = "virtual:islx/hooks-client";
 const SERVER_HOOKS_ID = "virtual:islx/hooks-server";
 

@@ -175,6 +175,7 @@ A Start app as islands, with configuration only:
 
 ```ts
 // vite.config.ts
+import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import { islxTanstackStart } from "@farm.js/islx/tanstack-start";
@@ -196,7 +197,10 @@ unawaited to a client component streams in. Islands call Start server functions
 - Client components run without a router in the browser: they cannot use `useRouter`,
   `useNavigate` or `<Link>` (render plain `<a>` links; the server renders `<Link>` in routes).
 - A library's `"use client"` components render as server HTML.
+- A click before the islands hydrate is not replayed yet (the `interaction` strategy hydrates on
+  it, but the click itself is dropped).
 - Start sends a bot the whole page before any of it; people get it streamed.
+- Start needs Node 22.12 or later.
 
 `examples/tanstack-start` runs in the e2e suite, in development and from its production build.
 

@@ -11,9 +11,8 @@
  * (`clientComponents.include`); a library's stay server HTML.
  */
 import { normalizePath, type Plugin } from "vite";
-import { islx, type IslxOptions } from "../vite";
+import { ENTRY_ID as ISLX_ENTRY, islx, type IslxOptions } from "../vite";
 
-const ISLX_ENTRY = "virtual:islx/client-entry";
 const START_CLIENT_ENTRY = "virtual:tanstack-start-client-entry";
 const START_SERVER_ENTRY = "virtual:tanstack-start-server-entry";
 const START_ROUTER_ENTRY = "#tanstack-router-entry";
