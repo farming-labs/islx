@@ -47,6 +47,32 @@ test.describe("TanStack Start", () => {
     expect(errors).toEqual([]);
   });
 
+  test("a click before the browser entry runs is held, then replayed on the hydrated island", async ({
+    page,
+  }) => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    // Hold Start's client entry (islx's) back, as a slow network would.
+    await page.route(
+      /\/assets\/index-[^/]+\.js$|tanstack-start-dev-client-entry/,
+      async (route) => {
+        await released;
+        await route.continue();
+      },
+    );
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const counter = page.getByRole("button", { name: /^Home: / });
+    await counter.click();
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __islxPending: unknown[] }).__islxPending.length,
+      ),
+    ).toBe(1);
+    await expect(counter).toHaveText("Home: 2");
+    release();
+    await expect(counter).toHaveText("Home: 3");
+  });
+
   test("links move between routes without loading a document, and back", async ({ page }) => {
     const errors = collectErrors(page);
     await page.goto("/");

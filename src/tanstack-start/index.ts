@@ -34,8 +34,13 @@ export default createServerEntry({
 
 // The browser does not run the router, so the server dehydrates nothing for it: no loader data
 // or manifest in the page. Start reads this lifecycle when the request's render attaches.
+//
+// The page's head also gets islx's inline script that holds a click on an island before it has
+// hydrated, and replays it once it has (the root route's head scripts, written by <HeadContent />).
 const routerWrapper = (routerPath: string) => `import * as app from ${JSON.stringify(routerPath)};
+import { PREHYDRATION_SCRIPT } from "@farm.js/islx/client";
 export * from ${JSON.stringify(routerPath)};
+const islxHead = new WeakSet();
 export async function getRouter(...args) {
   const router = await app.getRouter(...args);
   const lifecycle = (router.serverSsrLifecycle ??= {});
@@ -43,6 +48,16 @@ export async function getRouter(...args) {
   (lifecycle.onServerSsrAttach ??= []).push((ssr) => {
     ssr.dehydrate = async () => ssr.disableHydration();
   });
+  const root = router.routeTree;
+  if (root && !islxHead.has(root)) {
+    islxHead.add(root);
+    const head = root.options.head;
+    const add = (own) => ({ ...own, scripts: [{ children: PREHYDRATION_SCRIPT }, ...(own?.scripts ?? [])] });
+    root.options.head = (context) => {
+      const own = head?.(context);
+      return own && typeof own.then === "function" ? own.then(add) : add(own);
+    };
+  }
   return router;
 }
 `;
