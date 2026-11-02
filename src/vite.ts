@@ -63,6 +63,9 @@ export interface IslxOptions {
 const RUNTIME_ID = "virtual:islx/runtime";
 /** @internal The browser entry, for a framework whose own entry imports it. */
 export const ENTRY_ID = "virtual:islx/client-entry";
+// The island runtime a library's client module imports. A library's own location (pnpm's store)
+// cannot see @farm.js/islx: this resolves it from the app, to the copy the app's pages use.
+const LIBRARY_RUNTIME_ID = "virtual:islx/react-for-libraries";
 const CLIENT_HOOKS_ID = "virtual:islx/hooks-client";
 const SERVER_HOOKS_ID = "virtual:islx/hooks-server";
 
@@ -351,6 +354,11 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
       preamble = resolved.plugins.some((plugin) => plugin.name === "vite:react-virtual-preamble");
     },
     resolveId(id) {
+      if (id === LIBRARY_RUNTIME_ID) {
+        return this.resolve("@farm.js/islx/react", path.join(config.root, "package.json"), {
+          skipSelf: true,
+        });
+      }
       if (
         id === RUNTIME_ID ||
         id === ENTRY_ID ||
@@ -460,6 +468,7 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
           },
           sideEffects: [RUNTIME_ID],
           directive: clientDirective,
+          ...(library ? { runtime: LIBRARY_RUNTIME_ID } : {}),
         });
         if (island) {
           // Client code: an inline action in it is a mistake, caught as the browser build would.

@@ -76,6 +76,8 @@ describe("directives", () => {
     expect(library!.code).toContain(
       '$$islx_island(Button, "node_modules/@acme/ui/dist/button.js", "Button", "load")',
     );
+    // Its runtime import resolves from the app, not from the library's folder.
+    expect(library!.code).toContain('from "virtual:islx/react-for-libraries"');
     expect(
       transform(
         "ssr",
@@ -97,5 +99,18 @@ describe("directives", () => {
       '"use client";\nexport function Card() { return null; }',
     );
     expect(hoisted!.code).toContain('"../node_modules/@acme/ui/dist/card.js"');
+  });
+
+  it("resolve a library's island runtime from the app", async () => {
+    const [main] = islx();
+    await (main!.configResolved as any)({ root: "/app", base: "/", command: "serve", plugins: [] });
+    const calls: unknown[][] = [];
+    const resolved = await (main!.resolveId as any).call(
+      { resolve: async (...args: unknown[]) => (calls.push(args), { id: "/app/islx-react.mjs" }) },
+      "virtual:islx/react-for-libraries",
+      "/store/@acme/ui/dist/button.js",
+    );
+    expect(resolved).toEqual({ id: "/app/islx-react.mjs" });
+    expect(calls).toEqual([["@farm.js/islx/react", "/app/package.json", { skipSelf: true }]]);
   });
 });
