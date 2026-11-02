@@ -10,6 +10,8 @@ export default defineConfig({
     "react/server": "src/react/server.ts",
     "react/client": "src/react/client.ts",
     vite: "src/vite.ts",
+    "tanstack-start": "src/tanstack-start/index.ts",
+    "tanstack-start/server": "src/tanstack-start/server.ts",
   },
   format: "esm",
   platform: "neutral",
@@ -17,7 +19,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: true,
-  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@farm\.js\/islx/],
+  external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@tanstack\//, /^@farm\.js\/islx/],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
   },

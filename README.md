@@ -13,7 +13,7 @@ islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mod
 replaces React Server Components' Flight payload. On a 300-page docs app it ships 26% less
 JavaScript, and a client navigation sends 2.5 KB instead of 12 KB.
 
-> Status: 0.0.4. React and Vite are supported; other renderers and framework
+> Status: 0.0.4. React, Vite and TanStack Start are supported; other renderers and framework
 > integrations follow. The wire format is in [SPEC.md](./SPEC.md), changes in
 > [CHANGELOG.md](./CHANGELOG.md).
 
@@ -168,6 +168,37 @@ export function Chart(props: { points: Map<string, number> }) { … }
 
 `examples/react` is a runnable app; `pnpm test:e2e` runs it in Chrome, in development and from
 its production build.
+
+## TanStack Start
+
+A Start app as islands, with configuration only:
+
+```ts
+// vite.config.ts
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import react from "@vitejs/plugin-react";
+import { islxTanstackStart } from "@farm.js/islx/tanstack-start";
+
+export default defineConfig({ plugins: [tanstackStart(), react(), islxTanstackStart()] });
+```
+
+Routes, loaders and layouts render on the server. The browser loads islx and the `"use client"`
+components a page uses (the modules under `src/`), not the router, the route tree or loader
+data: Start's client entry becomes islx's, `<Scripts />` still loads it, and the router is not
+dehydrated. Links move between routes without loading a document. A loader's promise passed
+unawaited to a client component streams in. Islands call Start server functions
+(`createServerFn`) and islx server actions (`"use server"`).
+
+- An app with its own `src/server.ts` renders with islx's handler:
+  `createServerEntry({ fetch: createStartHandler(islandsHandler) })`, with `islandsHandler` from
+  `@farm.js/islx/tanstack-start/server` (and `handleAction` from `@farm.js/islx/server` in front of
+  it for islx actions).
+- Client components run without a router in the browser: they cannot use `useRouter`,
+  `useNavigate` or `<Link>` (render plain `<a>` links; the server renders `<Link>` in routes).
+- A library's `"use client"` components render as server HTML.
+- Start sends a bot the whole page before any of it; people get it streamed.
+
+`examples/tanstack-start` runs in the e2e suite, in development and from its production build.
 
 ## In a framework
 
