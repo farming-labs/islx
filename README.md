@@ -13,7 +13,7 @@ islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mod
 replaces React Server Components' Flight payload. On a 300-page docs app it ships 26% less
 JavaScript, and a client navigation sends 2.5 KB instead of 12 KB.
 
-> Status: 0.0.5. React, Vite and TanStack Start are supported; other renderers and framework
+> Status: 0.0.6. React, Vite and TanStack Start are supported; other renderers and framework
 > integrations follow. The wire format is in [SPEC.md](./SPEC.md), changes in
 > [CHANGELOG.md](./CHANGELOG.md).
 
@@ -186,7 +186,8 @@ export default defineConfig({ plugins: [tanstackStart(), react(), islxTanstackSt
 Routes, loaders and layouts render on the server. The browser loads islx and the `"use client"`
 components a page uses (the modules under `src/`), not the router, the route tree or loader
 data: Start's client entry becomes islx's, `<Scripts />` still loads it, and the router is not
-dehydrated. A click on an island before it hydrates is held and replayed. Links move between
+dehydrated. A click on a button (or a form submit) in an island before it hydrates is held and
+replayed. Links move between
 routes without loading a document. A loader's promise passed
 unawaited to a client component streams in. Islands call Start server functions
 (`createServerFn`) and islx server actions (`"use server"`).
