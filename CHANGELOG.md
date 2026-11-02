@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.6
+
+Server action interceptor, early clicks on TanStack Start, library islands under pnpm.
+
+- `setActionInterceptor((call, next) => …)` from `@farm.js/islx/client` wraps every server
+  action call, references decoded from props included. It sees the call when it is made
+  (`{ id, name, args }`) and `next` sends it in queue order, so a framework can unwrap what its
+  server side adds to a result (cache invalidations, a query's cache entry, a declared failure).
+- TanStack Start: a click on a button, or a form submit, in an island before it hydrates is held
+  and replayed, as in a plain islx app (the pre-hydration script goes in the root route's head).
+- A library's `"use client"` components (islands the Vite plugin makes in a bundled server build)
+  import islx's island runtime from the app instead of from the library's folder. Under pnpm the
+  library's folder in the store cannot see `@farm.js/islx`, so the server build failed to resolve
+  `@farm.js/islx/react`; now it gets the same copy the app's pages use.
+
 ## 0.0.5
 
 TanStack Start.
