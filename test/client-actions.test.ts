@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createServerReference,
   decodeActionReference,
+  setActionInterceptor,
   setActionNavigator,
 } from "@farm.js/islx/client";
 
@@ -29,6 +30,7 @@ const json = (body: unknown, headers: Record<string, string> = {}) =>
 afterEach(() => {
   vi.unstubAllGlobals();
   setActionNavigator({});
+  setActionInterceptor(undefined);
 });
 
 describe("client references", () => {
@@ -127,6 +129,69 @@ describe("client references", () => {
     const sent = mockFetch(() => json({ result: null }));
     await createServerReference("outer")(createServerReference("inner", "tok"));
     expect(JSON.parse(sent[0]!.body as string).a).toEqual([{ $: "a", v: "inner", b: "tok" }]);
+  });
+});
+
+describe("an action interceptor", () => {
+  it("wraps every call, references decoded from props included, and shapes the result", async () => {
+    mockFetch(() => json({ result: { wrapped: { value: 3 }, extra: ["key"] } }));
+    const seen: unknown[] = [];
+    setActionInterceptor(async (call, next) => {
+      seen.push(call);
+      const result = (await next()) as { wrapped: unknown; extra: string[] };
+      return result.wrapped;
+    });
+    const save = createServerReference("intercepted-id", undefined, "save").bind(null, "bound");
+    expect(await save("arg")).toEqual({ value: 3 });
+    const decoded = decodeActionReference({ $: "a", v: "decoded-id" })!;
+    expect(await decoded()).toEqual({ value: 3 });
+    expect(seen).toEqual([
+      { id: "intercepted-id", name: "save", args: ["bound", "arg"] },
+      { id: "decoded-id", name: undefined, args: [] },
+    ]);
+  });
+
+  it("sees each call when it is made, and keeps calls in order", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const order: string[] = [];
+    mockFetch(async (sent, index) => {
+      if (index === 0) await gate;
+      return json({ result: (sent.headers["F-Action"] ?? "") + index });
+    });
+    let active = "";
+    setActionInterceptor(async (call, next) => {
+      order.push(`start ${call.id} during ${active}`);
+      const value = await next();
+      order.push(`end ${call.id}`);
+      return value;
+    });
+    active = "first";
+    const first = createServerReference("one")();
+    active = "second";
+    const second = createServerReference("two")();
+    active = "";
+    release();
+    expect(await Promise.all([first, second])).toEqual(["one0", "two1"]);
+    expect(order).toEqual([
+      "start one during first",
+      "start two during second",
+      "end one",
+      "end two",
+    ]);
+  });
+
+  it("does not hold the page back from reloading for an action this deploy does not know", async () => {
+    mockFetch(() => new Response("", { status: 409, headers: { "F-Action-Stale": "1" } }));
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...location, reload, href: location.href });
+    setActionInterceptor(async (_call, next) => ({ shaped: await next() }));
+    const pending = createServerReference("stale-intercepted")();
+    let settled = false;
+    void pending.then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(reload).toHaveBeenCalled();
+    expect(settled).toBe(false);
   });
 });
 

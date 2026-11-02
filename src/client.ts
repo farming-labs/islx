@@ -8,7 +8,10 @@ export {
 export {
   createServerReference,
   decodeActionReference,
+  setActionInterceptor,
   setActionNavigator,
+  type ActionCall,
+  type ActionInterceptor,
   type ActionNavigator,
 } from "./client/actions";
 export { enhanceForms } from "./client/forms";

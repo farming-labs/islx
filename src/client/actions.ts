@@ -45,7 +45,27 @@ interface ClientReference {
 
 const STATE_KEY = Symbol.for("islx.actions.client");
 
+/** A call of a server action, as an interceptor sees it. */
+export interface ActionCall {
+  id: string;
+  /** The export (or inline function) name, when known. */
+  name?: string;
+  /** The arguments, after any bound with `.bind`. */
+  args: readonly unknown[];
+}
+
+/**
+ * Wraps every server action call: call `next` to make the request, and return what the caller
+ * gets. A framework uses it to unwrap what its own server side adds to a result (cache
+ * invalidations, a query's cache entry) or to turn a returned error back into one it throws.
+ */
+export type ActionInterceptor = (
+  call: ActionCall,
+  next: () => Promise<unknown>,
+) => Promise<unknown>;
+
 interface ClientState {
+  interceptor?: ActionInterceptor;
   navigator: ActionNavigator;
   queue: Promise<unknown>;
   references: Map<string, AnyFunction>;
@@ -65,6 +85,11 @@ function state(): ClientState {
 /** Connects actions to the framework's router. */
 export function setActionNavigator(navigator: ActionNavigator): void {
   state().navigator = navigator;
+}
+
+/** Installs the framework's interceptor for server action calls (one; a later call replaces it). */
+export function setActionInterceptor(interceptor: ActionInterceptor | undefined): void {
+  state().interceptor = interceptor;
 }
 
 /** Encodes an action passed back to the server as an argument. */
@@ -171,7 +196,31 @@ function createReference(reference: ClientReference): AnyFunction {
       reference.redirect = undefined;
       return call(reference, args);
     };
-    const result = client.queue.then(run).then(
+    // The calls before this one, as they stand now: `next` may run after this call has queued.
+    const previous = client.queue;
+    const queued = () => previous.then(run);
+    // The interceptor sees the call when it is made (a framework may read what it was doing then),
+    // and `next` sends it in turn.
+    const interceptor = client.interceptor;
+    let sent: Promise<unknown>;
+    if (!interceptor) {
+      sent = queued();
+    } else {
+      let stale = false;
+      const next = () =>
+        queued().then((value) => {
+          if (value === STALE) stale = true;
+          return value;
+        });
+      try {
+        sent = Promise.resolve(
+          interceptor({ id, name, args: [...reference.bound, ...args] }, next),
+        ).then((value) => (stale ? STALE : value));
+      } catch (error) {
+        sent = Promise.reject(error);
+      }
+    }
+    const result = sent.then(
       (value) => {
         if (value !== STALE) {
           const { redirect } = reference;
