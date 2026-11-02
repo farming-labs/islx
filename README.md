@@ -186,7 +186,8 @@ export default defineConfig({ plugins: [tanstackStart(), react(), islxTanstackSt
 Routes, loaders and layouts render on the server. The browser loads islx and the `"use client"`
 components a page uses (the modules under `src/`), not the router, the route tree or loader
 data: Start's client entry becomes islx's, `<Scripts />` still loads it, and the router is not
-dehydrated. Links move between routes without loading a document. A loader's promise passed
+dehydrated. A click on an island before it hydrates is held and replayed. Links move between
+routes without loading a document. A loader's promise passed
 unawaited to a client component streams in. Islands call Start server functions
 (`createServerFn`) and islx server actions (`"use server"`).
 
@@ -197,8 +198,6 @@ unawaited to a client component streams in. Islands call Start server functions
 - Client components run without a router in the browser: they cannot use `useRouter`,
   `useNavigate` or `<Link>` (render plain `<a>` links; the server renders `<Link>` in routes).
 - A library's `"use client"` components render as server HTML.
-- A click before the islands hydrate is not replayed yet (the `interaction` strategy hydrates on
-  it, but the click itself is dropped).
 - Start sends a bot the whole page before any of it; people get it streamed.
 - Start needs Node 22.12 or later.
 
