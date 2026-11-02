@@ -247,7 +247,25 @@ export function resolveDirectives(directives: IslxOptions["directives"] = {}): {
   return { client, server };
 }
 
-export function islx(options: IslxOptions = {}): Plugin[] {
+/**
+ * @internal How a framework integration hosts islx (`@farm.js/islx/tanstack-start`).
+ */
+export interface IslxHost {
+  /** The framework's own client entry imports islx's, so islx adds no browser entry of its own. */
+  frameworkEntry?: boolean;
+  /**
+   * The framework renders pages itself, without `renderToStream`: the server runtime islands need
+   * loads with them.
+   */
+  frameworkRender?: boolean;
+  /**
+   * The framework orders the build (the browser before the server): client modules come from
+   * `clientComponents.include`, and the server build gets their files directly.
+   */
+  frameworkBuild?: boolean;
+}
+
+export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
   const directives = resolveDirectives(options.directives);
   let config: ResolvedConfig;
   let parse: Parse;
@@ -260,6 +278,8 @@ export function islx(options: IslxOptions = {}): Plugin[] {
   let entryUrl: string | undefined;
   /** The files each client module needs, once the browser build named them. */
   const moduleFiles: Record<string, string[]> = {};
+  /** Whether the browser build ran first (a framework that orders the build). */
+  let clientBuilt = false;
   // One key per build; every instance of the build shares it. A new one per dev server.
   const buildKey = randomBytes(32).toString("base64url");
 
@@ -306,14 +326,18 @@ export function islx(options: IslxOptions = {}): Plugin[] {
             build: {
               outDir: clientBuild?.outDir ?? "dist/client",
               rollupOptions: {
-                input: {
-                  ...(typeof input === "string"
-                    ? { index: input }
-                    : Array.isArray(input)
-                      ? Object.fromEntries(input.map((entry, index) => [`input${index}`, entry]))
-                      : input),
-                  "islx-entry": ENTRY_ID,
-                },
+                input: host.frameworkEntry
+                  ? input
+                  : {
+                      ...(typeof input === "string"
+                        ? { index: input }
+                        : Array.isArray(input)
+                          ? Object.fromEntries(
+                              input.map((entry, index) => [`input${index}`, entry]),
+                            )
+                          : input),
+                      "islx-entry": ENTRY_ID,
+                    },
               },
             },
           },
@@ -338,10 +362,23 @@ export function islx(options: IslxOptions = {}): Plugin[] {
     },
     async load(id) {
       if (id === `\0${RUNTIME_ID}`) {
-        // Imported by every server module with islands or actions.
-        const entry = isBuild() ? ENTRY_PLACEHOLDER : `${config.base}@id/__x00__${ENTRY_ID}`;
-        const modules = isBuild() ? `JSON.parse(${JSON.stringify(MODULES_PLACEHOLDER)})` : "{}";
+        // Imported by every server module with islands or actions. After the browser build (a
+        // framework that builds it first) the values are known; otherwise placeholders stand for
+        // them until `buildApp` writes them in.
+        const entry = host.frameworkEntry
+          ? undefined
+          : !isBuild()
+            ? `${config.base}@id/__x00__${ENTRY_ID}`
+            : clientBuilt
+              ? entryUrl
+              : ENTRY_PLACEHOLDER;
+        const modules = !isBuild()
+          ? "{}"
+          : clientBuilt
+            ? JSON.stringify(moduleFiles)
+            : `JSON.parse(${JSON.stringify(MODULES_PLACEHOLDER)})`;
         return [
+          ...(host.frameworkRender ? [`import "@farm.js/islx/react/server";`] : []),
           `import { setBuildDefaults, setServerHooks } from "@farm.js/islx/server";`,
           `import hooks from ${JSON.stringify(SERVER_HOOKS_ID)};`,
           `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
@@ -472,6 +509,7 @@ export function islx(options: IslxOptions = {}): Plugin[] {
     name: "islx:build",
     sharedDuringBuild: true,
     async buildApp(builder: ViteBuilder) {
+      if (host.frameworkBuild) return;
       const servers = Object.values(builder.environments).filter((environment) =>
         isServer(environment.name),
       );
@@ -508,6 +546,7 @@ export function islx(options: IslxOptions = {}): Plugin[] {
           );
         }
       }
+      clientBuilt = true;
     },
   };
 
