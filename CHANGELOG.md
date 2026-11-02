@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.5
+
+TanStack Start.
+
+- `@farm.js/islx/tanstack-start`: `islxTanstackStart()` next to `tanstackStart()` runs a Start app
+  as islands, with configuration only. Routes, loaders and layouts render on the server; the
+  browser loads islx and the `"use client"` components a page uses (the modules under `src/`), not
+  the router, the route tree or loader data. Start's client entry becomes islx's and the router is
+  not dehydrated. Links move between routes without loading a document; a loader's promise passed
+  unawaited to a client component streams in; islands call Start server functions and islx server
+  actions. An app with its own `src/server.ts` uses `islandsHandler` from
+  `@farm.js/islx/tanstack-start/server`. Needs Node 22.12 or later (Start's own requirement).
+
 ## 0.0.4
 
 Promise props, and islands in a page that streams after it loaded.
