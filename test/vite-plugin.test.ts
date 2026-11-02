@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { islx, resolveDirectives } from "@farm.js/islx/vite";
 
@@ -111,6 +112,8 @@ describe("directives", () => {
       "/store/@acme/ui/dist/button.js",
     );
     expect(resolved).toEqual({ id: "/app/islx-react.mjs" });
-    expect(calls).toEqual([["@farm.js/islx/react", "/app/package.json", { skipSelf: true }]]);
+    expect(calls).toEqual([
+      ["@farm.js/islx/react", path.join("/app", "package.json"), { skipSelf: true }],
+    ]);
   });
 });
