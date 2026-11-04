@@ -25,11 +25,17 @@ import {
 import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
-// an earlier response never has two promises of one name.
-const PROMISE_PREFIX = `${Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
-  part.toString(36),
-).join("")}.`;
+// an earlier response never has two promises of one name. The random prefix is made at the first
+// render: Cloudflare Workers reject a module that generates random values while it loads.
+let promisePrefix: string | undefined;
 let promiseCount = 0;
+
+function nextPromiseName(): string {
+  promisePrefix ??= `${Array.from(crypto.getRandomValues(new Uint32Array(2)), (part) =>
+    part.toString(36),
+  ).join("")}.`;
+  return promisePrefix + (promiseCount++).toString(36);
+}
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -46,7 +52,7 @@ setIslandServerHook({
       encodeSpecial: (value) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
         if (isThenable(value)) {
-          const name = PROMISE_PREFIX + (promiseCount++).toString(36);
+          const name = nextPromiseName();
           promises.push({ name, promise: value });
           return { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
         }
