@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   SealError,
@@ -72,6 +73,29 @@ describe("sealed captured values", () => {
     expect(
       (await rejection(unsealBound(before, "a", await sealBound(rotated, "a", [1])))).reason,
     ).toBe("stale");
+  });
+
+  it("reports a value as stale when the new key shares the old key's first id byte", async () => {
+    // Format version 1 named the key with that byte alone, so this deploy (one in 256) answered
+    // open pages with invalid instead of a reload.
+    const firstByte = (secret: string) => createHash("sha256").update(secret).digest()[0];
+    let next = generateActionKey();
+    while (firstByte(next) !== firstByte(key)) next = generateActionKey();
+    const sealed = await sealBound(await createActionKeys(key), "a", ["kept"]);
+    expect((await rejection(unsealBound(await createActionKeys(next), "a", sealed))).reason).toBe(
+      "stale",
+    );
+  });
+
+  it("reports values in the version 1 format as stale", async () => {
+    const keys = await createActionKeys(key);
+    // version 1 ‖ one-byte key id ‖ IV ‖ the smallest ciphertext ("[]" and its tag): 32 bytes.
+    for (const length of [32, 64]) {
+      const bytes = crypto.getRandomValues(new Uint8Array(length));
+      bytes[0] = 1;
+      const sealed = Buffer.from(bytes).toString("base64url");
+      expect((await rejection(unsealBound(keys, "a", sealed))).reason).toBe("stale");
+    }
   });
 
   it("names a captured variable it cannot carry", async () => {

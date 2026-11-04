@@ -198,14 +198,17 @@ travel with the action, sealed, so the browser can neither read nor change them:
 sealed = base64url( version ‖ key id ‖ IV ‖ AES-256-GCM(ciphertext ‖ tag) )
 ```
 
-- `version` is `1`; `key id` is the first byte of SHA-256 of the key; the IV is 12 random bytes;
+- `version` is `2` (one byte); `key id` is the first 4 bytes of SHA-256 of the key, big-endian;
+  the IV is 12 random bytes;
 - the additional data is `islx:action:<id>`, so values sealed for one action never open for
   another;
 - the plaintext is the captured values as a tagged JSON array.
 
-A value sealed with a key the server does not have is **stale** (the page reloads); anything that
-does not open is **invalid** (`400`). Servers may hold previous keys, so pages rendered before a
-key rotation keep working. Every server instance must share the keys.
+A value sealed with a key the server does not have, or in another `version`, is **stale** (the
+page reloads); anything that does not open is **invalid** (`400`). Servers may hold previous keys,
+so pages rendered before a key rotation keep working. Every server instance must share the keys.
+Version 1 named the key with one byte, so one key rotation in 256 made values from open pages
+invalid instead of stale; its values are stale now.
 
 ## Integration model
 
