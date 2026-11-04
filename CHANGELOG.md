@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.7
+
+Cloudflare Workers start, and sealed captured values name their key with 4 bytes.
+
+- `@farm.js/islx/react/server` no longer generates random values while it loads. It made the
+  promise-name prefix with `crypto.getRandomValues` at module scope, which Workers reject
+  ("Disallowed operation called within global scope"), so no islx app started on Cloudflare
+  since promise props (0.0.4). The prefix is made at the first render now.
+- An inline `"use server"` function's captured values are sealed with format version 2: the key id
+  is the first 4 bytes of the key's SHA-256 instead of the first byte. With one byte, a deploy that
+  changed keys without keeping the old one gave the new key the same id one time in 256, and
+  values from pages rendered before it failed as invalid (`400`) instead of stale (the page
+  reloads). An app that does not set `ISLX_ACTIONS_KEY` gets a new key on every build, so this hit
+  about one deploy in 256.
+- Values sealed by 0.0.6 or earlier (format version 1) are stale: forms on pages open across the
+  upgrade reload once.
+
 ## 0.0.6
 
 Server action interceptor, early clicks on TanStack Start, library islands under pnpm.
