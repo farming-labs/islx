@@ -20,7 +20,7 @@
  * Sealing is asynchronous. React's server renderer waits for it: a form whose action's values
  * are still sealing suspends, and renders once they are ready.
  *
- *   sealed = base64url( version (1 byte) ‖ key id (1 byte) ‖ IV (12 bytes) ‖ ciphertext+tag )
+ *   sealed = base64url( version (1 byte) ‖ key id (4 bytes) ‖ IV (12 bytes) ‖ ciphertext+tag )
  */
 import {
   EncodeError,
@@ -30,8 +30,12 @@ import {
   type EncodeOptions,
 } from "../protocol/codec";
 
-const VERSION = 1;
+// Version 1 named the key with one byte, so after a deploy changed keys one value in 256 named a
+// key the server had and failed to open as invalid instead of stale. Its values are stale now.
+const VERSION = 2;
+const KEY_ID_BYTES = 4;
 const IV_BYTES = 12;
+const HEADER_BYTES = 1 + KEY_ID_BYTES;
 const KEY_BYTES = 32;
 
 /** Thrown when a sealed value does not open: changed, made for another action, or stale. */
@@ -51,11 +55,11 @@ export class SealError extends Error {
 export interface ActionKeys {
   /** The key new values are sealed with. */
   current: CryptoKey;
-  /** Its id, written into each sealed value (0-255). */
+  /** Its id, written into each sealed value (a 32-bit unsigned integer). */
   currentId: number;
   /**
-   * Every key that opens a value, by id: the current one and earlier ones still accepted. Ids are
-   * one byte, so two keys can share one; each is tried.
+   * Every key that opens a value, by id: the current one and earlier ones still accepted. Two keys
+   * may still share an id; each is tried.
    */
   byId: ReadonlyMap<number, readonly CryptoKey[]>;
 }
@@ -80,7 +84,7 @@ function fromBase64url(text: string): Uint8Array | null {
   }
 }
 
-/** A new random key, as base64url: what `FURROW_ACTIONS_KEY` holds. */
+/** A new random key, as base64url: what `ISLX_ACTIONS_KEY` holds. */
 export function generateActionKey(): string {
   return base64url(crypto.getRandomValues(new Uint8Array(KEY_BYTES)));
 }
@@ -98,10 +102,10 @@ async function importKey(secret: string): Promise<CryptoKey> {
   ]);
 }
 
-/** The key's id: its first byte of SHA-256, so a value names the key that sealed it. */
+/** The key's id: the first 4 bytes of its SHA-256, so a value names the key that sealed it. */
 async function keyId(secret: string): Promise<number> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret.trim()));
-  return new Uint8Array(digest)[0]!;
+  return new DataView(digest).getUint32(0);
 }
 
 /**
@@ -183,11 +187,11 @@ export async function sealBound(
       new TextEncoder().encode(json),
     ),
   );
-  const sealed = new Uint8Array(2 + IV_BYTES + ciphertext.length);
+  const sealed = new Uint8Array(HEADER_BYTES + IV_BYTES + ciphertext.length);
   sealed[0] = VERSION;
-  sealed[1] = keys.currentId;
-  sealed.set(iv, 2);
-  sealed.set(ciphertext, 2 + IV_BYTES);
+  new DataView(sealed.buffer).setUint32(1, keys.currentId);
+  sealed.set(iv, HEADER_BYTES);
+  sealed.set(ciphertext, HEADER_BYTES + IV_BYTES);
   return base64url(sealed);
 }
 
@@ -202,13 +206,14 @@ export async function unsealBound(
   options: Pick<DecodeOptions, "decodeReference"> = {},
 ): Promise<unknown[]> {
   const bytes = fromBase64url(sealed);
-  if (!bytes || bytes.length < 2 + IV_BYTES + 16) {
-    throw new SealError("invalid", "sealed action values are malformed");
-  }
-  if (bytes[0] !== VERSION) {
+  // A value in another format version is stale whatever its length: the page reloads.
+  if (bytes && bytes.length > 0 && bytes[0] !== VERSION) {
     throw new SealError("stale", "sealed action values use another format version");
   }
-  const candidates = keys.byId.get(bytes[1]!);
+  if (!bytes || bytes.length < HEADER_BYTES + IV_BYTES + 16) {
+    throw new SealError("invalid", "sealed action values are malformed");
+  }
+  const candidates = keys.byId.get(new DataView(bytes.buffer).getUint32(1));
   if (!candidates) {
     throw new SealError("stale", "sealed action values use a key this server does not have");
   }
@@ -218,11 +223,11 @@ export async function unsealBound(
       plaintext = await crypto.subtle.decrypt(
         {
           name: "AES-GCM",
-          iv: bytes.subarray(2, 2 + IV_BYTES) as BufferSource,
+          iv: bytes.subarray(HEADER_BYTES, HEADER_BYTES + IV_BYTES) as BufferSource,
           additionalData: additionalData(actionId) as BufferSource,
         },
         key,
-        bytes.subarray(2 + IV_BYTES) as BufferSource,
+        bytes.subarray(HEADER_BYTES + IV_BYTES) as BufferSource,
       );
       break;
     } catch {
