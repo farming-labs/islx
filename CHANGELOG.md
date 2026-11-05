@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.0.8
+
+Pages load the runtime only when they first need it, and islands that only react to clicks wait
+for one.
+
+- Pages start with a 1.4 KB boot script (`@farm.js/islx/boot`) instead of the browser entry
+  (65.6 KB on the React example). It loads the entry at once when an island hydrates at load (such
+  an island also preloads it), and otherwise on an island's trigger, a click, press or focus on a
+  waiting island, a pointer over a link, or a focus in a form. A link clicked before then is held
+  and followed once navigation runs. `islx({ boot: false })` starts every page with the entry.
+- A `"use client"` module without a `hydrate` export waits for a click when its code, and the app
+  files it imports, provably do nothing before one: no effect, external store or `use()`, no
+  handler but `onClick` and `onSubmit` on its elements, no form field, `ref` or `autoFocus`, no
+  props spread onto an element, and imports only from React, stylesheets and the app. The click is
+  held and replayed once it hydrates. A render that passes such an island `children` hydrates at
+  load. `islx({ infer: false })` keeps every island at load; `inferStrategy` in
+  `@farm.js/islx/compiler` runs the checks for other plugins.
+- A click on a same-page link (`#…`) in an island that has not hydrated is held and replayed, as a
+  button's is, so a table of contents that marks its heading still sees it.
+- Changed defaults: an island whose module declares nothing and passes the checks above now
+  waits for a click. Add `export const hydrate = "load"` to keep one hydrating at load.
+
 ## 0.0.7
 
 Cloudflare Workers start, and sealed captured values name their key with 4 bytes.
