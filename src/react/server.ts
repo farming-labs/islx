@@ -12,6 +12,7 @@ import {
   TAG,
   TAG_VALUE,
 } from "../protocol/wire";
+import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
@@ -137,15 +138,23 @@ export async function renderToStream(
     element,
     formState ? React.createElement(FormStateScript, { formState }) : null,
   );
-  const entry = bootstrap ? getBuildDefaults().entry : undefined;
+  const defaults = getBuildDefaults();
+  const entry = bootstrap ? defaults.entry : undefined;
+  // The boot entry starts the page and loads the browser entry when the page first needs it.
+  const boot = entry !== undefined ? defaults.boot : undefined;
   const bootstrapModules = entry
-    ? [...(options.bootstrapModules ?? []), entry]
+    ? [...(options.bootstrapModules ?? []), boot ?? entry]
     : options.bootstrapModules;
+  const runtime = boot
+    ? `window.${RUNTIME_GLOBAL}=${escapeScriptJson(JSON.stringify(entry))};`
+    : "";
   // The inline script runs as soon as the page's content is parsed, before the deferred entry.
   const bootstrapScriptContent =
     (prehydration ?? entry !== undefined)
-      ? `${PREHYDRATION_SCRIPT}${options.bootstrapScriptContent ?? ""}`
-      : options.bootstrapScriptContent;
+      ? `${PREHYDRATION_SCRIPT}${runtime}${options.bootstrapScriptContent ?? ""}`
+      : runtime || options.bootstrapScriptContent
+        ? `${runtime}${options.bootstrapScriptContent ?? ""}`
+        : undefined;
   // Loaded here, not at the top: importing this module (for islands' server code) must work in any
   // React environment, including a react-server one that has no renderToReadableStream.
   const { renderToReadableStream } = await import("react-dom/server");

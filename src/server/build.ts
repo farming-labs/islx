@@ -6,6 +6,11 @@
 export interface BuildDefaults {
   /** The URL of the browser entry `renderToStream` adds to pages. */
   entry?: string;
+  /**
+   * The URL of the boot entry (`@farm.js/islx/boot`): pages start with it instead, and it loads
+   * `entry` when the page first needs it. An island that hydrates at load preloads `entry`.
+   */
+  boot?: string;
   /** A key made for this build: every instance of one build shares it. */
   key?: string;
   /**

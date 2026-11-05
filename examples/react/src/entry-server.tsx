@@ -2,8 +2,13 @@ import { renderToStream } from "@farm.js/islx/react/server";
 import { handleAction, type ReactFormState } from "@farm.js/islx/server";
 import Home from "./pages/home";
 import Todos from "./pages/todos";
+import Quiet from "./pages/quiet";
 
-const routes: Record<string, () => Promise<React.ReactNode>> = { "/": Home, "/todos": Todos };
+const routes: Record<string, () => Promise<React.ReactNode>> = {
+  "/": Home,
+  "/todos": Todos,
+  "/quiet": Quiet,
+};
 
 async function page(request: Request, formState?: ReactFormState): Promise<Response> {
   const route = routes[new URL(request.url).pathname];

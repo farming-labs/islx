@@ -6,7 +6,9 @@ send only what changed.
 
 ```html
 <f-island src="/src/cart.tsx" export="Cart" props="_R_1_" strategy="load">…server HTML…</f-island>
-<script type="f/props" for="_R_1_">{"updated":{"$":"D","v":"2026-10-28T09:00:00.000Z"}}</script>
+<script type="f/props" for="_R_1_">
+  {"updated":{"$":"D","v":"2026-10-28T09:00:00.000Z"}}
+</script>
 ```
 
 islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mode, where it
@@ -108,19 +110,36 @@ export async function handle(request: Request) {
 
 async function page(request: Request, formState?) {
   const stream = await renderToStream(<App />, { request, formState });
-  return new Response(stream, { headers: { "content-type": "text/html", "cache-control": "private" } });
+  return new Response(stream, {
+    headers: { "content-type": "text/html", "cache-control": "private" },
+  });
 }
 ```
 
 ```tsx
 // src/components/chart.tsx
 "use client";
-export const hydrate = "visible"; // or { Chart: "visible", Legend: "idle" }; default "load"
+export const hydrate = "visible"; // or { Chart: "visible", Legend: "idle" }; see below
 export function Chart(props: { points: Map<string, number> }) { … }
 ```
 
 - Components are server components unless their module says `"use client"`; those render as
   islands, and the page needs no other setup: `renderToStream` adds the browser entry.
+- A module without a `hydrate` export hydrates at load, unless its code provably does nothing
+  before a click: then it waits for one (`"interaction"`), and the click is held and replayed
+  once it hydrates. That means no effect, external store or `use()`, no handler but `onClick` and
+  `onSubmit` on its elements (a handled link only with a `#` link), no form field, `ref` or
+  `autoFocus`, no props spread onto an element, and imports only from React, stylesheets and the
+  app's own files that pass the same checks: copy buttons, like buttons, menu toggles and tables
+  of contents usually do. A render that gives the island server output (`children`) hydrates at
+  load. `islx({ infer: false })` turns this off; `inferStrategy` in `@farm.js/islx/compiler`
+  runs the same checks for other plugins.
+- Pages start with a 1.4 KB boot script instead of the browser entry. It loads the entry at once
+  when an island hydrates at load (which also preloads it), and otherwise when an island's
+  trigger comes, a waiting island is clicked, pressed or focused, the pointer reaches a link, or
+  a form gets focus. A link clicked before then is held and followed once navigation runs. So a
+  page whose islands all wait loads 1.4 KB of JavaScript until one is used. `islx({ boot: false })`
+  starts every page with the entry.
 - `vite build` builds the server, then the browser with exactly the client components the server
   rendered, each in its own chunk. `islx({ clientComponents: { include, exclude } })` adds
   components the server build cannot see (chosen by name at runtime) or leaves some out.
@@ -142,19 +161,29 @@ export function Chart(props: { points: Map<string, number> }) { … }
     navigation: { viewTransition: true },
     hooks: {
       client: {
-        navigate(event) { if (window.unsaved) event.preventDefault(); },  // stay on the page
-        navigated({ url, duration }) { window.plausible?.("pageview", { u: url.href }); },
-        hydrate({ export: name, duration }) { console.debug(name, "interactive in", duration); },
-        islandError({ src, error }) { console.error(src, error); },
+        navigate(event) {
+          if (window.unsaved) event.preventDefault();
+        }, // stay on the page
+        navigated({ url, duration }) {
+          window.plausible?.("pageview", { u: url.href });
+        },
+        hydrate({ export: name, duration }) {
+          console.debug(name, "interactive in", duration);
+        },
+        islandError({ src, error }) {
+          console.error(src, error);
+        },
         actionEnd({ name, ok, duration }) {},
       },
       server: {
-        async action({ request, name, module }, run) { /* check, log, time */ return run(); },
+        async action({ request, name, module }, run) {
+          /* check, log, time */ return run();
+        },
         actionError: (error) => (error instanceof Unauthorized ? { status: 401 } : undefined),
         error(error, { name }) {},
       },
     },
-  })
+  });
   ```
 
   Callbacks are copied into the browser or server build as source, so they may use only their
@@ -163,6 +192,7 @@ export function Chart(props: { points: Map<string, number> }) { … }
   exporting `defineServerHooks({ … })` (or `defineClientHooks`). Every client hook also fires as a
   DOM event on `document`: `f:navigate`, `f:navigated`, `f:navigate-error`, `f:hydrate`,
   `f:island-error`, `f:action`, `f:action-end`.
+
 - Each build makes its own key for sealed action values; set `ISLX_ACTIONS_KEY` to keep forms
   working across deploys.
 
@@ -209,26 +239,26 @@ unawaited to a client component streams in. Islands call Start server functions
 A framework that renders pages itself (Farm does) uses the pieces directly instead of
 `renderToStream` and the Vite plugin's entry:
 
-| Need | API |
-| --- | --- |
-| Compile client and action modules | `transformClientModule({ …, reference, strategy })`, `transformActions` from `@farm.js/islx/compiler` |
-| Render islands in its own render | wrap the page in `<IslandsProvider held={parseHeldValues(request)}>` |
-| A layout that hydrates as one root | `withinClientRoot(layout)`; its server-HTML page: `isolateIslands(page)` |
-| An async page under such a layout | `renderServerTree(page, { held, payloadOnly })` on the server; `createServerTreeElement(source, { load, ServerHtml })` in the browser |
+| Need                                                                  | API                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compile client and action modules                                     | `transformClientModule({ …, reference, strategy })`, `transformActions` from `@farm.js/islx/compiler`                                                                                                                                   |
+| Render islands in its own render                                      | wrap the page in `<IslandsProvider held={parseHeldValues(request)}>`                                                                                                                                                                    |
+| A layout that hydrates as one root                                    | `withinClientRoot(layout)`; its server-HTML page: `isolateIslands(page)`                                                                                                                                                                |
+| An async page under such a layout                                     | `renderServerTree(page, { held, payloadOnly })` on the server; `createServerTreeElement(source, { load, ServerHtml })` in the browser                                                                                                   |
 | A server layout around a client provider, without shipping the layout | `renderServerTree(<Layout><Outlet /></Layout>, { outlets: { children: page }, scope })` on the server; `createServerTreeLayout(source, scope, { load, ServerHtml, onUpdate })` in the browser, then `layout.render({ children: page })` |
-| Hydrate | `createHydrationRuntime({ load, schedule?, wrap?, report? })`, `createServerHtml(runtime)` |
-| Hold early clicks | inline `PREHYDRATION_SCRIPT` in the page |
-| Actions | `handleAction(request, { allowedOrigins, bodySizeLimit, run, mapError, renderFormState })`; `setActionNavigator({ refresh, navigate })` |
-| Navigation with its router | send `F-Values` (`valueHeaders()`), `F-Layouts`, `F-Render`; `refreshDocument` / `swapDocument` or its own swap |
+| Hydrate                                                               | `createHydrationRuntime({ load, schedule?, wrap?, report? })`, `createServerHtml(runtime)`                                                                                                                                              |
+| Hold early clicks                                                     | inline `PREHYDRATION_SCRIPT` in the page                                                                                                                                                                                                |
+| Actions                                                               | `handleAction(request, { allowedOrigins, bodySizeLimit, run, mapError, renderFormState })`; `setActionNavigator({ refresh, navigate })`                                                                                                 |
+| Navigation with its router                                            | send `F-Values` (`valueHeaders()`), `F-Layouts`, `F-Render`; `refreshDocument` / `swapDocument` or its own swap                                                                                                                         |
 
 ## Planned
 
-| Entry | For |
-| --- | --- |
-| `@farm.js/islx/react` | server trees (a page rebuilt inside a hydrated layout), partial navigations |
-| `@farm.js/islx/webpack` | webpack, Rspack, and Next.js (Turbopack uses the loader) |
-| `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt` | thin framework integrations |
-| `@farm.js/islx/testing` | the conformance suite every integration must pass |
+| Entry                                                             | For                                                                         |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `@farm.js/islx/react`                                             | server trees (a page rebuilt inside a hydrated layout), partial navigations |
+| `@farm.js/islx/webpack`                                           | webpack, Rspack, and Next.js (Turbopack uses the loader)                    |
+| `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt` | thin framework integrations                                                 |
+| `@farm.js/islx/testing`                                           | the conformance suite every integration must pass                           |
 
 ## License
 

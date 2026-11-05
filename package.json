@@ -39,6 +39,10 @@
       "types": "./dist/client.d.mts",
       "default": "./dist/client.mjs"
     },
+    "./boot": {
+      "types": "./dist/boot.d.mts",
+      "default": "./dist/boot.mjs"
+    },
     "./server": {
       "types": "./dist/server.d.mts",
       "default": "./dist/server.mjs"

@@ -314,7 +314,12 @@ export function createIsland<P extends object>(
   Component: React.ComponentType<P>,
   src: string,
   exportName: string,
-  strategy: IslandStrategy = "load",
+  declared: IslandStrategy = "load",
+  /**
+   * `inferred`: the compiler inferred `declared` (`"interaction"`). A render that passes the island
+   * server output hydrates at load instead: islands inside that output would wait with it.
+   */
+  options: { inferred?: boolean } = {},
 ): React.ComponentType<P> {
   function Island(props: P) {
     const { graph, render } = getContexts();
@@ -331,9 +336,12 @@ export function createIsland<P extends object>(
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
     let renderProps: unknown;
+    let strategy = declared;
     try {
-      const { render: rendered, wire } = splitSlots(props, `${id}s`, { next: 0 });
+      const slots = { next: 0 };
+      const { render: rendered, wire } = splitSlots(props, `${id}s`, slots);
       renderProps = rendered;
+      if (options.inferred && slots.next > 0) strategy = "load";
       const skip = state ? new Set([...(state.held ?? []), ...state.sent]) : null;
       encoded = hook.encode(wire as Record<string, unknown>, skip);
       for (const value of encoded.values) state?.sent.add(value.key);
@@ -354,7 +362,12 @@ export function createIsland<P extends object>(
     // The island's code starts loading with the page, not after the entry runs. React writes the
     // links into the head, once each. Deferred islands keep their code for later.
     if (strategy === "load") {
-      for (const href of getBuildDefaults().modules?.[src] ?? [])
+      const defaults = getBuildDefaults();
+      // A page that starts with the boot entry loads the browser entry for this island: fetch it
+      // alongside the boot rather than after it.
+      if (defaults.boot && defaults.entry)
+        ReactDOM.preloadModule?.(defaults.entry, { as: "script" });
+      for (const href of defaults.modules?.[src] ?? [])
         ReactDOM.preloadModule?.(href, { as: "script" });
     }
 

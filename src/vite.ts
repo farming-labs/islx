@@ -58,11 +58,26 @@ export interface IslxOptions {
     client?: string | ClientHooks;
     server?: string | ServerHooks;
   };
+  /**
+   * A client module without a `hydrate` export waits for a click when its code provably does
+   * nothing before one (`inferStrategy` in `@farm.js/islx/compiler`): a page of such islands loads
+   * the runtime only when one is used. Default true; false hydrates them at load.
+   */
+  infer?: boolean;
+  /**
+   * Pages start with a small boot script (`@farm.js/islx/boot`) instead of the browser entry,
+   * and load the entry when the page first needs it: at once when an island hydrates at load,
+   * otherwise on an island's trigger or a link. Default true; false starts every page with the
+   * entry.
+   */
+  boot?: boolean;
 }
 
 const RUNTIME_ID = "virtual:islx/runtime";
 /** @internal The browser entry, for a framework whose own entry imports it. */
 export const ENTRY_ID = "virtual:islx/client-entry";
+/** The boot entry: pages start with it, and it loads ENTRY_ID when the page first needs it. */
+export const BOOT_ID = "virtual:islx/boot";
 // The island runtime a library's client module imports. A library's own location (pnpm's store)
 // cannot see @farm.js/islx: this resolves it from the app, to the copy the app's pages use.
 const LIBRARY_RUNTIME_ID = "virtual:islx/react-for-libraries";
@@ -156,6 +171,7 @@ export function serializeHooks(
  * build until the browser build names them. */
 const ENTRY_PLACEHOLDER = "__islx_client_entry_url__";
 const MODULES_PLACEHOLDER = "__islx_client_modules__";
+const BOOT_PLACEHOLDER = "__islx_boot_url__";
 const SCRIPT = /\.[cm]?[jt]sx?$/;
 
 type Parse = (file: string, code: string) => AstNode;
@@ -280,6 +296,7 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
   const discovered = new Set<string>();
   /** The browser entry's URL, once the browser build named it. */
   let entryUrl: string | undefined;
+  let bootUrl: string | undefined;
   /** The files each client module needs, once the browser build named them. */
   const moduleFiles: Record<string, string[]> = {};
   /** Whether the browser build ran first (a framework that orders the build). */
@@ -341,6 +358,7 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
                             )
                           : input),
                       "islx-entry": ENTRY_ID,
+                      ...(options.boot === false ? {} : { "islx-boot": BOOT_ID }),
                     },
               },
             },
@@ -362,6 +380,7 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
       if (
         id === RUNTIME_ID ||
         id === ENTRY_ID ||
+        id === BOOT_ID ||
         id === CLIENT_HOOKS_ID ||
         id === SERVER_HOOKS_ID
       ) {
@@ -381,6 +400,14 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
             : clientBuilt
               ? entryUrl
               : ENTRY_PLACEHOLDER;
+        const boot =
+          host.frameworkEntry || options.boot === false
+            ? undefined
+            : !isBuild()
+              ? `${config.base}@id/__x00__${BOOT_ID}`
+              : clientBuilt
+                ? bootUrl
+                : BOOT_PLACEHOLDER;
         const modules = !isBuild()
           ? "{}"
           : clientBuilt
@@ -390,7 +417,7 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
           ...(host.frameworkRender ? [`import "@farm.js/islx/react/server";`] : []),
           `import { setBuildDefaults, setServerHooks } from "@farm.js/islx/server";`,
           `import hooks from ${JSON.stringify(SERVER_HOOKS_ID)};`,
-          `setBuildDefaults({ entry: ${JSON.stringify(entry)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
+          `setBuildDefaults({ entry: ${JSON.stringify(entry)}, boot: ${JSON.stringify(boot)}, key: ${JSON.stringify(buildKey)}, modules: ${modules} });`,
           `setServerHooks(hooks);`,
         ].join("\n");
       }
@@ -402,6 +429,9 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
           return `export { default } from ${JSON.stringify(path.resolve(config.root, hooks))};`;
         }
         return serializeHooks(hooks as Record<string, unknown>, where, parse);
+      }
+      if (id === `\0${BOOT_ID}`) {
+        return `import { startBoot } from "@farm.js/islx/boot";\nstartBoot();\n`;
       }
       if (id === `\0${ENTRY_ID}`) {
         // In a build the server build has run: every client module it rendered gets a chunk.
@@ -469,7 +499,13 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
           sideEffects: [RUNTIME_ID],
           directive: clientDirective,
           ...(library ? { runtime: LIBRARY_RUNTIME_ID } : {}),
+          // A library's islands keep their own strategy: its code is not the app's to read.
+          ...(options.infer !== false && !library ? { infer: { parse } } : {}),
         });
+        // The files an inferred strategy read: an edit to one infers it again.
+        for (const read of island?.inference?.files ?? []) {
+          if (read !== file) this.addWatchFile(read);
+        }
         if (island) {
           // Client code: an inline action in it is a mistake, caught as the browser build would.
           if (!library) {
@@ -531,13 +567,20 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
         const outDir = path.resolve(config.root, environment.config.build.outDir);
         for (const file of await listOutput(outDir)) {
           const source = await readFile(file, "utf8");
-          if (!source.includes(ENTRY_PLACEHOLDER) && !source.includes(MODULES_PLACEHOLDER))
+          if (
+            !source.includes(ENTRY_PLACEHOLDER) &&
+            !source.includes(MODULES_PLACEHOLDER) &&
+            !source.includes(BOOT_PLACEHOLDER)
+          )
             continue;
           // The modules map sits in a JSON string literal: escape it as one.
           const modules = JSON.stringify(JSON.stringify(moduleFiles)).slice(1, -1);
           await writeFile(
             file,
-            source.replaceAll(ENTRY_PLACEHOLDER, entryUrl).replaceAll(MODULES_PLACEHOLDER, modules),
+            source
+              .replaceAll(ENTRY_PLACEHOLDER, entryUrl)
+              .replaceAll(MODULES_PLACEHOLDER, modules)
+              .replaceAll(BOOT_PLACEHOLDER, bootUrl ?? ""),
           );
         }
       }
@@ -549,6 +592,8 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
         if (chunk.type !== "chunk" || !chunk.facadeModuleId) continue;
         if (chunk.isEntry && chunk.facadeModuleId === `\0${ENTRY_ID}`) {
           entryUrl = url(chunk.fileName);
+        } else if (chunk.isEntry && chunk.facadeModuleId === `\0${BOOT_ID}`) {
+          bootUrl = url(chunk.fileName);
         } else if (chunk.isDynamicEntry && !chunk.facadeModuleId.startsWith("\0")) {
           // A client module: its chunk, then what it imports (shared with the entry or not).
           moduleFiles[relativeOf(chunk.facadeModuleId)] = [chunk.fileName, ...chunk.imports].map(

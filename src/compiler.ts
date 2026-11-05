@@ -8,3 +8,4 @@ export {
   type TransformActionsOptions,
   type TransformActionsResult,
 } from "./compiler/actions";
+export { inferStrategy, type Inference, type InferOptions } from "./compiler/infer";
