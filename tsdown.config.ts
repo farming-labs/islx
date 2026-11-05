@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     client: "src/client.ts",
+    boot: "src/boot.ts",
     server: "src/server.ts",
     compiler: "src/compiler.ts",
     react: "src/react.ts",

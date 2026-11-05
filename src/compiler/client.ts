@@ -16,6 +16,7 @@ import path from "node:path";
 import MagicString from "magic-string";
 import { ISLAND_STRATEGIES, type IslandStrategy } from "../client/schedule";
 import { ActionCompileError, hasModuleDirective, type AstNode } from "./actions";
+import { inferStrategy, type Inference, type InferOptions } from "./infer";
 
 export interface TransformClientOptions {
   code: string;
@@ -40,6 +41,11 @@ export interface TransformClientOptions {
    * the module's `hydrate` export. Return undefined to use that.
    */
   strategy?(exportName: string): IslandStrategy | undefined;
+  /**
+   * Infers the strategy of a module that sets no `hydrate` export: `"interaction"` when its code
+   * provably does nothing before a click (`inferStrategy`). Off when not given.
+   */
+  infer?: InferOptions;
 }
 
 export interface TransformClientResult {
@@ -47,6 +53,8 @@ export interface TransformClientResult {
   map: ReturnType<MagicString["generateMap"]>;
   /** Exported components and when each hydrates. */
   islands: Array<{ exportName: string; strategy: IslandStrategy }>;
+  /** The inference, when the module was inferred: the files it read, for a watcher. */
+  inference?: Inference;
 }
 
 const FUNCTION_TYPES = new Set([
@@ -127,12 +135,24 @@ export function transformClientModule(
     throw new ActionCompileError(message, file, code, node.start);
   };
   const strategies = readStrategies(program, fail);
+  // A module that sets no `hydrate` export: its islands wait for a click when they provably can.
+  const inference =
+    options.infer && strategies.all === undefined && strategies.byName.size === 0
+      ? inferStrategy(file, code, options.infer)
+      : undefined;
+  const inferred = (name: string) =>
+    options.strategy?.(name) === undefined && inference?.strategy === "interaction";
   const strategyOf = (name: string): IslandStrategy => {
     const configured = options.strategy?.(name);
     if (configured !== undefined && !ISLAND_STRATEGIES.includes(configured)) {
       throw new Error(`islx: strategy for ${name} must be one of ${ISLAND_STRATEGIES.join(", ")}`);
     }
-    return configured ?? strategies.byName.get(name) ?? strategies.all ?? "load";
+    return (
+      configured ??
+      strategies.byName.get(name) ??
+      strategies.all ??
+      (inference?.strategy === "interaction" ? "interaction" : "load")
+    );
   };
 
   const output = new MagicString(code);
@@ -211,7 +231,10 @@ export function transformClientModule(
   const src = options.reference(relative);
   const lines = [
     ...wrapped.map(({ local, exportName }, index) => {
-      return `const $$islx_island_${index} = $$islx_island(${local}, ${src}, ${JSON.stringify(exportName)}, ${JSON.stringify(strategyOf(exportName === "default" ? "default" : exportName))});`;
+      const strategy = JSON.stringify(strategyOf(exportName));
+      // An inferred strategy: the island hydrates at load in a render that passes it server output.
+      const flags = inferred(exportName) ? ", { inferred: true }" : "";
+      return `const $$islx_island_${index} = $$islx_island(${local}, ${src}, ${JSON.stringify(exportName)}, ${strategy}${flags});`;
     }),
     `export { ${wrapped.map(({ exportName }, index) => `$$islx_island_${index} as ${exportName}`).join(", ")} };`,
   ];
@@ -225,5 +248,6 @@ export function transformClientModule(
     code: output.toString(),
     map: output.generateMap({ hires: true, source: file }),
     islands: wrapped.map(({ exportName }) => ({ exportName, strategy: strategyOf(exportName) })),
+    ...(inference ? { inference } : {}),
   };
 }

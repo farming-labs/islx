@@ -1,6 +1,9 @@
 "use client";
 import { useState } from "react";
 
+// Hydrates at load, as the home page's tests expect (islx would infer "interaction" for it).
+export const hydrate = "load";
+
 export function Counter({ start, label }: { start: number; label: string }) {
   const [count, setCount] = useState(start);
   return (

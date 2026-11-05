@@ -38,6 +38,16 @@ interface Interaction {
 const REPLAYABLE =
   'button,[role="button"],input[type="button"],input[type="submit"],input[type="reset"]';
 
+/**
+ * The element a click before hydration is held on: a control, or a same-page link, whose handler
+ * the island may need (a table of contents marking its heading). Any other link navigates.
+ */
+export function heldTarget(target: Element): Element | null {
+  const link = target.closest("a[href]");
+  if (link) return link.getAttribute("href")?.startsWith("#") ? link : null;
+  return target.closest(REPLAYABLE);
+}
+
 function whenIdle(callback: () => void): () => void {
   const scope = window as typeof window & {
     requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
@@ -255,11 +265,10 @@ export function scheduleHydration<T>({
     };
     const onClick = (event: Event) => {
       const mouse = event as MouseEvent;
-      const target = event.target instanceof Element ? event.target.closest(REPLAYABLE) : null;
+      const target = event.target instanceof Element ? heldTarget(event.target) : null;
       if (
         !target ||
         !container.contains(target) ||
-        target.closest("a[href]") ||
         mouse.button !== 0 ||
         mouse.metaKey ||
         mouse.altKey ||

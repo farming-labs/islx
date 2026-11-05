@@ -1,6 +1,7 @@
 /**
  * Holding interactions that happen before the islx script has run. An inline script in the page
- * captures a click or a submit on an island that has not hydrated (it is prevented and queued),
+ * captures a click or a submit on an island that has not hydrated (it is prevented and queued; a
+ * click on a link only when the link stays on the page, `#…`),
  * and announces a pointerdown or a focus (which go through). The runtime then hydrates those
  * islands first and replays what was held.
  *
@@ -21,7 +22,7 @@ export interface PendingInteraction {
 }
 
 /** The inline script's source (no `<script>` tag): pass it to the page's head or bootstrap. */
-export const PREHYDRATION_SCRIPT = `(function(){if(window.${PENDING_INTERACTIONS})return;var q=window.${PENDING_INTERACTIONS}=[];function island(n){var i=n&&n.closest&&n.closest("f-island");return i&&!i.hasAttribute("hydrated")?i:null}function tell(t,k){document.dispatchEvent(new CustomEvent("${INTERACTION_EVENT}",{detail:{target:t,kind:k}}))}function hold(e,t,k){if(!q.some(function(p){return p.target===t})){q.push({target:t,kind:k});tell(t,k)}e.preventDefault();e.stopImmediatePropagation()}document.addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0||e.metaKey||e.altKey||e.ctrlKey||e.shiftKey)return;var t=e.target&&e.target.closest&&e.target.closest(${JSON.stringify(REPLAYABLE_SELECTOR)});if(!t||t.closest("a[href]")||!island(t))return;hold(e,t,"click")},true);document.addEventListener("submit",function(e){var f=e.target;if(e.defaultPrevented||!f||f.nodeName!=="FORM"||!island(f))return;hold(e,f,"submit")},true);function seen(e){if(island(e.target))tell(e.target,null)}document.addEventListener("pointerdown",seen,true);document.addEventListener("focusin",seen,true)})();`;
+export const PREHYDRATION_SCRIPT = `(function(){if(window.${PENDING_INTERACTIONS})return;var q=window.${PENDING_INTERACTIONS}=[];function island(n){var i=n&&n.closest&&n.closest("f-island");return i&&!i.hasAttribute("hydrated")?i:null}function tell(t,k){document.dispatchEvent(new CustomEvent("${INTERACTION_EVENT}",{detail:{target:t,kind:k}}))}function hold(e,t,k){if(!q.some(function(p){return p.target===t})){q.push({target:t,kind:k});tell(t,k)}e.preventDefault();e.stopImmediatePropagation()}document.addEventListener("click",function(e){if(e.defaultPrevented||e.button!==0||e.metaKey||e.altKey||e.ctrlKey||e.shiftKey)return;var n=e.target&&e.target.closest?e.target:null,a=n&&n.closest("a[href]"),t=a?(a.getAttribute("href").charAt(0)==="#"?a:null):n&&n.closest(${JSON.stringify(REPLAYABLE_SELECTOR)});if(!t||!island(t))return;hold(e,t,"click")},true);document.addEventListener("submit",function(e){var f=e.target;if(e.defaultPrevented||!f||f.nodeName!=="FORM"||!island(f))return;hold(e,f,"submit")},true);function seen(e){if(island(e.target))tell(e.target,null)}document.addEventListener("pointerdown",seen,true);document.addEventListener("focusin",seen,true)})();`;
 
 /** Takes the interactions the inline script held inside `container`, oldest first. */
 export function takePendingInteractions(container: Element): PendingInteraction[] {
