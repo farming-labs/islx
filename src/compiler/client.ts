@@ -16,6 +16,7 @@ import path from "node:path";
 import MagicString from "magic-string";
 import { ISLAND_STRATEGIES, type IslandStrategy } from "../client/schedule";
 import { ActionCompileError, hasModuleDirective, type AstNode } from "./actions";
+import { rewriteFormStatusImport } from "./form-status";
 import { inferStrategy, type Inference, type InferOptions } from "./infer";
 
 export interface TransformClientOptions {
@@ -156,6 +157,8 @@ export function transformClientModule(
   };
 
   const output = new MagicString(code);
+  // A server form around the island reports its submit to the island's `useFormStatus`.
+  rewriteFormStatusImport(program, code, output, options.runtime ?? "@farm.js/islx/react");
   const wrapped: Array<{ local: string; exportName: string }> = [];
   for (const node of program.body ?? []) {
     if (node.type === "ExportNamedDeclaration" && !node.source && node.exportKind !== "type") {

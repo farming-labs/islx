@@ -21,8 +21,9 @@ import { walk } from "estree-walker";
 import { analyze } from "periscopic";
 import type { Plugin, ResolvedConfig, ViteBuilder } from "vite";
 import type { ClientHooks } from "./client/hooks";
-import { transformActions, type AstNode } from "./compiler/actions";
+import { hasModuleDirective, transformActions, type AstNode } from "./compiler/actions";
 import { transformClientModule } from "./compiler/client";
+import { rewriteFormStatusImports } from "./compiler/form-status";
 import type { ServerHooks } from "./server/hooks";
 
 export interface IslxOptions {
@@ -522,6 +523,17 @@ export function islx(options: IslxOptions = {}, host: IslxHost = {}): Plugin[] {
         }
       }
       if (library) return null;
+      // The browser keeps client modules as they are, but for `useFormStatus` (the server build
+      // rewrote it in transformClientModule).
+      if (
+        !server &&
+        !code.includes(directives.server) &&
+        hasModuleDirective(code, clientDirective) &&
+        !excluded(relative)
+      ) {
+        const rewritten = rewriteFormStatusImports({ code, id: file, parse: parseFile });
+        if (rewritten) return rewritten;
+      }
       const actions = transformActions({
         code,
         id: file,

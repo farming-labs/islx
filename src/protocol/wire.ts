@@ -13,12 +13,22 @@
 export const ISLAND_ELEMENT = "f-island";
 /** The script type of an island's props; its `for` attribute names the island. */
 export const PROPS_SCRIPT_TYPE = "f/props";
+/**
+ * On a props script: the id React gave the island's position on the server, so the browser
+ * hydrates the island where the server rendered it and `useId` matches.
+ */
+export const ID_POSITION_ATTRIBUTE = "ids";
 /** The script type of a value sent once; its `name` attribute is the value's key. */
 export const VALUE_SCRIPT_TYPE = "f/value";
 /** Set on an island once it hydrated (and its held interaction was replayed). */
 export const HYDRATED_ATTRIBUTE = "hydrated";
 /** The element that keeps server output passed to an island as children. */
 export const SLOT_ELEMENT = "f-slot";
+/**
+ * After an island's props: `<template for>` holding the `<f-slot>`s the island did not place when
+ * the server rendered it, which the browser shows when the island places them.
+ */
+export const SLOT_TEMPLATE_ELEMENT = "template";
 /** The script type of a page's server tree, rebuilt in the browser without the page's HTML. */
 export const TREE_SCRIPT_TYPE = "f/tree";
 /** The script type of a server tree chunk that streamed in after the tree. */
@@ -44,6 +54,11 @@ export const TAG_BOUND = "b";
 export const REFERENCE_TAG = "r";
 /** `{"$":"s","v":name}`: a slot. */
 export const SLOT_TAG = "s";
+/**
+ * On a slot reference: `1` when the slot carries a server tree (`<script type="f/tree">` named
+ * after the slot) that the browser rebuilds inside the island, instead of keeping its HTML.
+ */
+export const SLOT_TREE_FIELD = "t";
 /** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
 export const ACTION_TAG = "a";
 /**
@@ -138,6 +153,9 @@ export function getTag(value: unknown): string | undefined {
   if (keys.length === 1) return tag;
   if (keys.length === 2 && TAG_VALUE in value) return tag;
   if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
+    return tag;
+  }
+  if (keys.length === 3 && tag === SLOT_TAG && TAG_VALUE in value && SLOT_TREE_FIELD in value) {
     return tag;
   }
   return undefined;

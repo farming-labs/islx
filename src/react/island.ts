@@ -12,12 +12,17 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
+import { IdProbe, type IdRecord } from "./ids";
+import { renderSlotTree, type SlotTree } from "./tree";
 import {
+  ID_POSITION_ATTRIBUTE,
   ISLAND_ELEMENT,
   PROMISE_SCRIPT_TYPE,
   PROPS_SCRIPT_TYPE,
   SLOT_ELEMENT,
   SLOT_TAG,
+  SLOT_TEMPLATE_ELEMENT,
+  SLOT_TREE_FIELD,
   TAG,
   TAG_VALUE,
   VALUE_SCRIPT_TYPE,
@@ -146,7 +151,12 @@ export const runtimeTagged = new WeakSet<object>();
 
 // One per React copy on the page, shared by every copy of this module.
 const CONTEXTS = Symbol.for("islx.react.contexts");
-type Contexts = { graph: React.Context<boolean>; render: React.Context<IslandRenderState | null> };
+type Contexts = {
+  graph: React.Context<boolean>;
+  render: React.Context<IslandRenderState | null>;
+  /** The element an island hydrated into, in the browser. */
+  container: React.Context<Element | null>;
+};
 
 /** @internal */
 export function getContexts(): Contexts {
@@ -158,6 +168,7 @@ export function getContexts(): Contexts {
     contexts = {
       graph: React.createContext(false),
       render: React.createContext<IslandRenderState | null>(null),
+      container: React.createContext<Element | null>(null),
     };
     all.set(React.createElement, contexts);
   }
@@ -171,6 +182,49 @@ function isElement(value: unknown): value is React.ReactElement {
 
 const slotStyle = { display: "contents" } as const;
 
+/** An island's element props, by slot name, and the slots its render placed so far. */
+interface IslandSlots {
+  next: number;
+  elements: Map<string, React.ReactElement>;
+  /** The reference each slot travels as. */
+  references: Map<string, Record<string, unknown>>;
+  placed: Set<string>;
+  /** Each slot resolved (`renderSlotTree`), once the island's render has them. */
+  trees: Map<string, SlotTree>;
+}
+
+// One resolution per island render: React renders the island again with the same props once the
+// slots resolved, and a render that runs twice for one request reuses them.
+const resolvedSlots = new WeakMap<object, Promise<Map<string, SlotTree>>>();
+
+function resolveSlots(
+  props: object,
+  elements: Map<string, React.ReactElement>,
+  held: ReadonlySet<string> | null,
+): Promise<Map<string, SlotTree>> {
+  let resolved = resolvedSlots.get(props);
+  if (!resolved) {
+    resolved = Promise.all(
+      Array.from(
+        elements,
+        async ([name, element]) => [name, await renderSlotTree(element, name, held)] as const,
+      ),
+    ).then((entries) => new Map(entries));
+    resolvedSlots.set(props, resolved);
+  }
+  return resolved;
+}
+
+/** Server output in an island, where the island placed it. */
+function Slot({ name, slots }: { name: string; slots: IslandSlots }) {
+  slots.placed.add(name);
+  return React.createElement(
+    SLOT_ELEMENT,
+    { name, style: slotStyle },
+    slots.trees.get(name)?.element,
+  );
+}
+
 /**
  * Splits props into what renders on the server and what travels: server output passed to an
  * island (`children`, or any element prop) renders once inside `<f-slot>`, and travels as a
@@ -179,23 +233,21 @@ const slotStyle = { display: "contents" } as const;
 function splitSlots(
   value: unknown,
   prefix: string,
-  counter: { next: number },
+  slots: IslandSlots,
 ): { render: unknown; wire: unknown } {
   if (isElement(value)) {
-    const name = `${prefix}${counter.next++}`;
-    const reference = { [TAG]: SLOT_TAG, [TAG_VALUE]: name };
+    const name = `${prefix}${slots.next++}`;
+    const reference: Record<string, unknown> = { [TAG]: SLOT_TAG, [TAG_VALUE]: name };
     runtimeTagged.add(reference);
+    slots.elements.set(name, value);
+    slots.references.set(name, reference);
     return {
-      render: React.createElement(
-        SLOT_ELEMENT,
-        { key: value.key ?? name, name, style: slotStyle },
-        value,
-      ),
+      render: React.createElement(Slot, { key: value.key ?? name, name, slots }),
       wire: reference,
     };
   }
   if (Array.isArray(value)) {
-    const parts = value.map((entry) => splitSlots(entry, prefix, counter));
+    const parts = value.map((entry) => splitSlots(entry, prefix, slots));
     return { render: parts.map((part) => part.render), wire: parts.map((part) => part.wire) };
   }
   if (value && typeof value === "object") {
@@ -204,7 +256,7 @@ function splitSlots(
     const render: Record<string, unknown> = {};
     const wire: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      const part = splitSlots(entry, prefix, counter);
+      const part = splitSlots(entry, prefix, slots);
       render[key] = part.render;
       wire[key] = part.wire;
     }
@@ -302,6 +354,51 @@ function IslandPromise({
   );
 }
 
+/**
+ * The island's props. It renders after the island, so by then the island's id position (`ids`) is
+ * known, and which of its element props it placed. The others (a closed panel, a tab not shown
+ * yet) render once in a `<template>` after the props, which the browser reads them from when the
+ * island shows them; a slot placed later, by a part of the island that suspended first, renders in
+ * both places.
+ */
+function PropsScript({
+  id,
+  ids,
+  slots,
+  json,
+}: {
+  id: string;
+  ids: IdRecord;
+  slots: IslandSlots;
+  json: string;
+}) {
+  const script = React.createElement("script", {
+    key: "props",
+    type: PROPS_SCRIPT_TYPE,
+    htmlFor: id,
+    [ID_POSITION_ATTRIBUTE]: ids.id,
+    dangerouslySetInnerHTML: { __html: json },
+  });
+  const unplaced = [...slots.elements].filter(([name]) => !slots.placed.has(name));
+  if (unplaced.length === 0) return script;
+  return React.createElement(
+    React.Fragment,
+    null,
+    script,
+    React.createElement(
+      SLOT_TEMPLATE_ELEMENT,
+      { key: "slots", htmlFor: id },
+      unplaced.map(([name]) =>
+        React.createElement(
+          SLOT_ELEMENT,
+          { key: name, name, style: slotStyle },
+          slots.trees.get(name)?.element,
+        ),
+      ),
+    ),
+  );
+}
+
 function isThenable(value: unknown): boolean {
   return !!value && typeof (value as { then?: unknown }).then === "function";
 }
@@ -325,8 +422,12 @@ export function createIsland<P extends object>(
     const { graph, render } = getContexts();
     const insideIsland = React.useContext(graph);
     const state = React.useContext(render) ?? resolveRenderState();
-    const id = React.useId();
+    // Inside an island this is the component itself, and calls no useId: React gives a component
+    // that calls it one more bit of id position, which would move the ids of everything below it
+    // away from the server's (where the island renders the component bare). An instance stays
+    // inside or outside an island for its whole life, so the hooks it calls never change.
     if (insideIsland) return React.createElement(Component, props);
+    const id = React.useId();
     const hook = getIslandServerHook();
     if (!hook) {
       throw new Error(
@@ -335,12 +436,23 @@ export function createIsland<P extends object>(
     }
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
-    let renderProps: unknown;
     let strategy = declared;
+    const slots: IslandSlots = {
+      next: 0,
+      elements: new Map(),
+      references: new Map(),
+      placed: new Set(),
+      trees: new Map(),
+    };
+    const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
+    // Server output passed as props resolves first (outside the try: `use` suspends by throwing).
+    if (slots.elements.size > 0) {
+      slots.trees = React.use(resolveSlots(props, slots.elements, state?.held ?? null));
+      for (const [name, reference] of slots.references) {
+        if (slots.trees.get(name)?.rebuild) reference[SLOT_TREE_FIELD] = 1;
+      }
+    }
     try {
-      const slots = { next: 0 };
-      const { render: rendered, wire } = splitSlots(props, `${id}s`, slots);
-      renderProps = rendered;
       if (options.inferred && slots.next > 0) strategy = "load";
       const skip = state ? new Set([...(state.held ?? []), ...state.sent]) : null;
       encoded = hook.encode(wire as Record<string, unknown>, skip);
@@ -358,6 +470,9 @@ export function createIsland<P extends object>(
       }
       return React.createElement(Component, props);
     }
+
+    // Where the island's component sits in the page, for its useId calls (see ./ids).
+    const ids: IdRecord = {};
 
     // The island's code starts loading with the page, not after the entry runs. React writes the
     // links into the head, once each. Deferred islands keep their code for later.
@@ -385,17 +500,17 @@ export function createIsland<P extends object>(
       React.createElement(
         ISLAND_ELEMENT,
         { key: "island", src, export: exportName, props: id, strategy, style: slotStyle },
-        React.createElement(
-          graph.Provider,
-          { value: true },
-          React.createElement(Component, renderProps as P),
-        ),
+        React.createElement(graph.Provider, { value: true }, [
+          React.createElement(IdProbe, { key: "ids", record: ids }),
+          React.createElement(Component, { ...(renderProps as P), key: "component" }),
+        ]),
       ),
-      React.createElement("script", {
+      React.createElement(PropsScript, {
         key: "props",
-        type: PROPS_SCRIPT_TYPE,
-        htmlFor: id,
-        dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
+        id,
+        ids,
+        slots,
+        json: hook.escape(encoded.json),
       }),
       ...promiseBoundaries(encoded.promises, `${exportName} (${src})`),
     );

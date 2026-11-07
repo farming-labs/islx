@@ -80,3 +80,40 @@ export default function () { return null; }
     expect(compile('"use client"; export const x = 1;')).toBeNull();
   });
 });
+
+describe("useFormStatus in client modules", () => {
+  it("comes from islx in the server build, keeping the module's other react-dom imports", () => {
+    const result = compile(`"use client";
+import ReactDOM, { createPortal, useFormStatus as useStatus } from "react-dom";
+export function Submit() { return useStatus().pending ? null : createPortal(null, document.body); }
+`)!;
+    expect(result.code).toContain('import ReactDOM, { createPortal } from "react-dom";');
+    expect(result.code).toContain(
+      'import { useFormStatus as useStatus } from "@farm.js/islx/react";',
+    );
+  });
+
+  it("comes from islx in the browser build, and stays React's through a namespace", async () => {
+    const { rewriteFormStatusImports } = await import("@farm.js/islx/compiler");
+    const parse = (source: string) => parseSync("submit.tsx", source).program as any;
+    const named = rewriteFormStatusImports({
+      code: `"use client";\nimport { useFormStatus } from "react-dom";\nexport const Submit = () => useFormStatus().pending;\n`,
+      id: "/app/src/submit.tsx",
+      parse,
+    })!;
+    expect(named.code).toContain(
+      'import { useFormStatus as useFormStatus } from "@farm.js/islx/react";',
+    );
+    expect(named.code).not.toContain('from "react-dom"');
+    expect(
+      rewriteFormStatusImports({
+        code: `"use client";\nimport * as ReactDOM from "react-dom";\nexport const Submit = () => ReactDOM.useFormStatus().pending;\n`,
+        id: "/app/src/submit.tsx",
+        parse,
+      }),
+    ).toBeNull();
+    expect(
+      rewriteFormStatusImports({ code: `export const x = 1;\n`, id: "/app/src/x.ts", parse }),
+    ).toBeNull();
+  });
+});

@@ -12,6 +12,7 @@ import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
 import {
   ACTION_TAG,
+  ID_POSITION_ATTRIBUTE,
   HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
   ISLAND_ELEMENT,
@@ -21,13 +22,16 @@ import {
   REFERENCE_TAG,
   SLOT_ELEMENT,
   SLOT_TAG,
+  SLOT_TEMPLATE_ELEMENT,
+  SLOT_TREE_FIELD,
   TAG,
   TAG_BOUND,
   TAG_VALUE,
   getTag,
 } from "../protocol/wire";
+import { atIdPosition, parseIdPosition, type IdPosition } from "./ids";
 import { getContexts } from "./island";
-import { updateServerTrees } from "./tree";
+import { createSlotTree, updateServerTrees } from "./tree";
 
 const ISLAND_SELECTOR = `${ISLAND_ELEMENT}[src]`;
 
@@ -48,6 +52,8 @@ export interface HydrationOptions {
 }
 
 interface RootRecord {
+  /** Where the server rendered the island, kept so every render builds the same tree. */
+  position: IdPosition | null;
   root: Root;
   Component: React.ComponentType<any>;
   src: string;
@@ -102,6 +108,55 @@ function readFormState(document: Document): unknown {
 const revivedValues = new WeakMap<object, unknown>();
 let slotsRevived = 0;
 
+/**
+ * A slot's server HTML: inside the island where it placed the slot, or in the template after its
+ * props for a slot it had not placed.
+ */
+function findSlot(container: Element, name: string): Element | null {
+  for (const slot of container.querySelectorAll(SLOT_ELEMENT)) {
+    if (slot.getAttribute("name") === name) return slot;
+  }
+  const id = container.getAttribute("props");
+  for (const template of container.ownerDocument.querySelectorAll<HTMLTemplateElement>(
+    `${SLOT_TEMPLATE_ELEMENT}[for]`,
+  )) {
+    if (template.getAttribute("for") !== id) continue;
+    for (const slot of template.content.querySelectorAll(SLOT_ELEMENT)) {
+      if (slot.getAttribute("name") === name) return slot;
+    }
+  }
+  return null;
+}
+
+/** Each island's slots that carry server trees, rebuilt before the island hydrates. */
+const preparedSlots = new WeakMap<Element, Map<string, React.ReactNode>>();
+
+/** The names of the slots in `value` that carry server trees. */
+function collectTreeSlots(value: unknown, names: Set<string>, seen = new Set<object>()): void {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  const object = value as Record<string, unknown>;
+  if (
+    object[TAG] === SLOT_TAG &&
+    object[SLOT_TREE_FIELD] === 1 &&
+    typeof object[TAG_VALUE] === "string"
+  ) {
+    names.add(object[TAG_VALUE]);
+    return;
+  }
+  for (const entry of Array.isArray(value) ? value : Object.values(object)) {
+    collectTreeSlots(entry, names, seen);
+  }
+}
+
+/** Whether `container` sits inside another island below `scope`. */
+function insideAnotherIsland(container: Element, scope: ParentNode): boolean {
+  for (let node = container.parentElement; node && node !== scope; node = node.parentElement) {
+    if (node.matches(ISLAND_SELECTOR)) return true;
+  }
+  return false;
+}
+
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
 function revive(value: unknown, container: Element, values: ValueStore): unknown {
   if (value && typeof value === "object") {
@@ -134,13 +189,16 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
   if (tag === SLOT_TAG && typeof object[TAG_VALUE] === "string") {
     slotsRevived++;
     const name = object[TAG_VALUE];
-    let html = "";
-    for (const slot of container.querySelectorAll(SLOT_ELEMENT)) {
-      if (slot.getAttribute("name") === name) {
-        html = slot.innerHTML;
-        break;
-      }
+    if (object[SLOT_TREE_FIELD] === 1) {
+      const tree = preparedSlots.get(container)?.get(name);
+      if (tree === undefined) throw new Error(`the server tree of slot ${name} was not prepared`);
+      return React.createElement(
+        SLOT_ELEMENT,
+        { key: name, name, style: { display: "contents" } },
+        tree,
+      );
     }
+    const html = findSlot(container, name)?.innerHTML ?? "";
     return React.createElement(SLOT_ELEMENT, {
       key: name,
       name,
@@ -382,26 +440,60 @@ export function createHydrationRuntime(options: HydrationOptions) {
   }
 
   const element = (
+    container: Element,
     Component: React.ComponentType<any>,
     props: Record<string, unknown>,
     restore: (error: unknown) => void,
+    position: IdPosition | null,
     onCommit?: () => void,
   ) => {
-    const { graph } = getContexts();
-    const inner = React.createElement(Component, props);
+    const { graph, container: containerContext } = getContexts();
+    const component = React.createElement(Component, props);
+    const inner = (position && atIdPosition(position, component)) || component;
     return React.createElement(
       graph.Provider,
       { value: true },
       React.createElement(
-        Boundary,
-        { onError: restore },
-        React.createElement(Committed, {
-          onCommit,
-          children: options.wrap ? options.wrap(inner) : inner,
-        }),
+        containerContext.Provider,
+        { value: container },
+        React.createElement(
+          Boundary,
+          { onError: restore },
+          React.createElement(Committed, {
+            onCommit,
+            children: options.wrap ? options.wrap(inner) : inner,
+          }),
+        ),
       ),
     );
   };
+
+  // Renders the server HTML parts of slot trees, and hydrates the islands inside them.
+  const ServerHtml = createServerHtml({ hydrate, dispose });
+
+  /** Rebuilds the server trees of an island's slots, loading their client modules. */
+  async function prepareSlots(container: Element, id: string): Promise<void> {
+    const text = findPropsScript(container, id)?.textContent ?? "";
+    if (!text.includes(`"${SLOT_TREE_FIELD}":1`)) return;
+    let parsed: unknown = JSON.parse(text);
+    if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
+      values.ingest(container.ownerDocument);
+      parsed = values.resolve(parsed);
+    }
+    const names = new Set<string>();
+    collectTreeSlots(parsed, names);
+    const trees = new Map<string, React.ReactNode>();
+    await Promise.all(
+      Array.from(names, async (name) => {
+        const slot = findSlot(container, name);
+        const tree =
+          slot && (await createSlotTree(slot, name, { load: options.load, ServerHtml, values }));
+        if (!tree) throw new Error(`slot ${name} has no server tree`);
+        trees.set(name, tree);
+      }),
+    );
+    preparedSlots.set(container, trees);
+  }
 
   /** An island's props, with values, slots and actions revived. */
   function readProps(container: Element, id: string): Record<string, unknown> {
@@ -442,7 +534,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
       (container) =>
         !roots.has(container) &&
         !pending.has(container) &&
-        !container.parentElement?.closest(ISLAND_SELECTOR) &&
+        !insideAnotherIsland(container, scope) &&
         !container.closest(STREAM_STAGING) &&
         !awaitsStreamedContent(container),
     );
@@ -492,7 +584,12 @@ export function createHydrationRuntime(options: HydrationOptions) {
                 ) {
                   throw new Error(`${src} has no export ${exportName}`);
                 }
+                await prepareSlots(container, id);
+                if (controller.signal.aborted || !container.isConnected) return;
                 const props = readProps(container, id);
+                const position = parseIdPosition(
+                  findPropsScript(container, id)?.getAttribute(ID_POSITION_ATTRIBUTE),
+                );
                 let failure: unknown;
                 const restore = (error: unknown) => {
                   if (failure !== undefined) return;
@@ -511,9 +608,17 @@ export function createHydrationRuntime(options: HydrationOptions) {
                   });
                 const root = hydrateRoot(
                   container,
-                  element(Component as React.ComponentType<any>, props, restore, onCommit),
+                  element(
+                    container,
+                    Component as React.ComponentType<any>,
+                    props,
+                    restore,
+                    position,
+                    onCommit,
+                  ),
                   {
                     formState: formState as never,
+                    ...(position ? { identifierPrefix: position.prefix } : {}),
                     onUncaughtError: restore,
                     onRecoverableError(error) {
                       // Unmounting a root before its first commit reports an early update.
@@ -525,6 +630,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
                   },
                 );
                 roots.set(container, {
+                  position,
                   root,
                   Component: Component as React.ComponentType<any>,
                   src,
@@ -589,7 +695,9 @@ export function createHydrationRuntime(options: HydrationOptions) {
       if (!previous || !record || !id) continue;
       try {
         const props = readProps(container, id);
-        record.root.render(element(record.Component, props, record.restore));
+        record.root.render(
+          element(previous, record.Component, props, record.restore, record.position),
+        );
         record.props = props;
         container.replaceWith(previous);
         carried++;
@@ -620,7 +728,9 @@ export function createHydrationRuntime(options: HydrationOptions) {
         continue;
       }
       record.Component = Component as React.ComponentType<any>;
-      record.root.render(element(record.Component, record.props, record.restore));
+      record.root.render(
+        element(container, record.Component, record.props, record.restore, record.position),
+      );
       updated++;
     }
     return updated;

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Islands behave as React Server Components do in four cases they did not.
+
+- `useId` in an island returns the ids its server HTML has, and two islands no longer share ids.
+  The props script carries the island's id position (`ids`), which the browser rebuilds before it
+  hydrates. The island wrapper no longer calls `useId` inside another island, where it moved every
+  id below it.
+- Client components in server output passed to an island (`children`, or any element prop) are
+  the island's descendants: they read its context, as a consumer below a provider does, and keep
+  their own state. Such output travels as a server tree named after its slot; plain HTML still
+  travels as HTML only.
+- An element prop the island does not render at first (a tab, a closed panel) renders when it
+  does. The server writes the slots it did not place in a `<template>` after the props.
+- `useFormStatus` in a client component inside a server component's `<form>` reports that form's
+  submit. The compiler points `useFormStatus` from `react-dom` at `@farm.js/islx/react`'s, which
+  is React's anywhere else; `rewriteFormStatusImports` in `@farm.js/islx/compiler` does it for
+  other plugins. A namespace import (`ReactDOM.useFormStatus`) keeps React's.
+
 ## 0.0.8
 
 Pages load the runtime only when they first need it, and islands that only react to clicks wait
