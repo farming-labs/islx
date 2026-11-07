@@ -9,6 +9,44 @@ import { createServerReference } from "./actions";
 
 let enhanced = false;
 
+/** A server form's submission, as React's `useFormStatus` reports a form's. */
+export interface ServerFormStatus {
+  pending: boolean;
+  data: FormData | null;
+  method: string | null;
+  action: ((data: FormData) => unknown) | null;
+}
+
+/** No submission in flight. */
+export const IDLE_FORM_STATUS: ServerFormStatus = Object.freeze({
+  pending: false,
+  data: null,
+  method: null,
+  action: null,
+});
+
+const statuses = new WeakMap<HTMLFormElement, ServerFormStatus>();
+const listeners = new Set<() => void>();
+
+function setStatus(form: HTMLFormElement, status: ServerFormStatus | null): void {
+  if (status) statuses.set(form, status);
+  else statuses.delete(form);
+  for (const listener of listeners) listener();
+}
+
+/** The submission in flight for a server form, or the idle status. */
+export function getServerFormStatus(form: HTMLFormElement): ServerFormStatus {
+  return statuses.get(form) ?? IDLE_FORM_STATUS;
+}
+
+/** Calls `listener` whenever a server form starts or settles a submission. */
+export function subscribeServerForms(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /** Starts handling server-component forms on this page. Safe to call more than once. */
 export function enhanceForms(): void {
   if (enhanced) return;
@@ -24,12 +62,14 @@ export function enhanceForms(): void {
     event.preventDefault();
     stripRuntimeFields(data);
     form.setAttribute("aria-busy", "true");
-    createServerReference(
-      posted.id,
-      posted.token,
-    )(data)
+    const action = createServerReference(posted.id, posted.token);
+    setStatus(form, { pending: true, data, method: form.method || "get", action });
+    action(data)
       .then(() => form.reset())
       .catch((error: unknown) => console.error("[islx] The form's action failed:", error))
-      .finally(() => form.removeAttribute("aria-busy"));
+      .finally(() => {
+        form.removeAttribute("aria-busy");
+        setStatus(form, null);
+      });
   });
 }

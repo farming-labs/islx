@@ -9,3 +9,4 @@ export {
   type TransformActionsResult,
 } from "./compiler/actions";
 export { inferStrategy, type Inference, type InferOptions } from "./compiler/infer";
+export { rewriteFormStatusImports } from "./compiler/form-status";

@@ -13,3 +13,5 @@ export {
 export type { IslandStrategy } from "./client/schedule";
 /** Server trees, shared by the framework's server and browser code (server code needs `react/server` imported). */
 export { Outlet, renderServerTree, type ServerTreeRenderOptions } from "./react/tree";
+/** React's `useFormStatus`, which also reports a server component's form around an island. */
+export { useFormStatus } from "./react/form-status";

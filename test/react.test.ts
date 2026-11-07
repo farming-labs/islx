@@ -2,21 +2,25 @@
 import {
   Suspense,
   act,
+  createContext,
+  useContext,
   createElement as h,
   use,
   useActionState,
+  useEffect,
+  useId,
   useState,
   type ReactNode,
 } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createIsland } from "@farm.js/islx/react";
+import { createIsland, useFormStatus } from "@farm.js/islx/react";
 import {
   createHydrationRuntime,
   endStreamedContent,
   scheduleHydration,
 } from "@farm.js/islx/react/client";
 import { renderToStream } from "@farm.js/islx/react/server";
-import { getValueStore } from "@farm.js/islx/client";
+import { enhanceForms, getValueStore } from "@farm.js/islx/client";
 import {
   configureActionKeys,
   generateActionKey,
@@ -113,6 +117,50 @@ function Keeps({ value }: { value: Promise<unknown> }) {
   return h("span", null, "kept");
 }
 
+function Field({ label }: { label: string }) {
+  const id = useId();
+  const [held, setHeld] = useState("");
+  useEffect(() => setHeld(id), [id]);
+  return h(
+    "p",
+    null,
+    h("label", { htmlFor: id }, label),
+    h("input", { id }),
+    h("output", { "data-held": label }, held),
+  );
+}
+function Tabs({ panels }: { panels: ReactNode[] }) {
+  const [active, setActive] = useState(0);
+  return h(
+    "div",
+    null,
+    h("button", { "data-next": "", onClick: () => setActive(active + 1) }, "next"),
+    h("div", { "data-panel": "" }, panels[active]),
+  );
+}
+
+const Theme = createContext({ theme: "none", toggle: () => {} });
+function ThemeProvider({ children }: { children?: ReactNode }) {
+  const [theme, setTheme] = useState("light");
+  return h(
+    Theme.Provider,
+    { value: { theme, toggle: () => setTheme(theme === "light" ? "dark" : "light") } },
+    h(
+      "button",
+      { "data-theme-toggle": "", onClick: () => setTheme(theme === "light" ? "dark" : "light") },
+      "toggle",
+    ),
+    children,
+  );
+}
+function ThemeLabel() {
+  return h("output", { "data-theme": "" }, useContext(Theme).theme);
+}
+async function ServerSection({ children }: { children?: ReactNode }) {
+  await Promise.resolve();
+  return h("article", null, h("p", null, "server text"), children);
+}
+
 const modules: Record<string, Record<string, unknown>> = {
   "/src/counter.tsx": { Counter },
   "/src/waits.tsx": { Waits },
@@ -121,6 +169,9 @@ const modules: Record<string, Record<string, unknown>> = {
   "/src/shows.tsx": { Shows },
   "/src/panel.tsx": { Panel },
   "/src/outer.tsx": { Outer },
+  "/src/field.tsx": { Field },
+  "/src/tabs.tsx": { Tabs },
+  "/src/theme.tsx": { ThemeProvider, ThemeLabel },
 };
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
@@ -129,6 +180,14 @@ const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
 const QuoteIsland = createIsland(Quote, "/src/quote.tsx", "Quote");
 const KeepsIsland = createIsland(Keeps, "/src/keeps.tsx", "Keeps");
+const FieldIsland = createIsland(Field, "/src/field.tsx", "Field");
+// A browser build that keeps the wrapper: the export the runtime hydrates is the island itself.
+const wrappedModules: Record<string, Record<string, unknown>> = {
+  "/src/field.tsx": { Field: FieldIsland },
+};
+const TabsIsland = createIsland(Tabs, "/src/tabs.tsx", "Tabs");
+const ThemeProviderIsland = createIsland(ThemeProvider, "/src/theme.tsx", "ThemeProvider");
+const ThemeLabelIsland = createIsland(ThemeLabel, "/src/theme.tsx", "ThemeLabel");
 
 function runtime(extra: Partial<Parameters<typeof createHydrationRuntime>[0]> = {}) {
   return createHydrationRuntime({
@@ -156,7 +215,7 @@ describe("islands", () => {
     expect(markup).toContain('<f-island src="/src/counter.tsx" export="Counter" props="');
     expect(markup).toContain('strategy="load"');
     expect(markup).toMatch(
-      /<script type="f\/props" for="[^"]+">\{"start":2,"label":"a"\}<\/script>/,
+      /<script type="f\/props" for="[^"]+" ids="[^"]+">\{"start":2,"label":"a"\}<\/script>/,
     );
     const islands = await mount(markup);
     expect(islands.rootCount()).toBe(1);
@@ -346,6 +405,99 @@ const SeenTreeIsland = createIsland(
   "SeenTree",
 );
 
+describe("ids in islands", () => {
+  it("are the ids the server rendered, deep in a page and unique across islands", async () => {
+    const rows = (count: number) =>
+      Array.from({ length: count }, (_, index) => h("li", { key: index }, `row ${index}`));
+    const markup = await html(
+      h(
+        "main",
+        null,
+        h("ul", null, rows(3)),
+        h("section", null, h("h2", null, "First"), h(FieldIsland, { label: "a" })),
+        h("ol", null, rows(40), h("li", null, h(FieldIsland, { label: "b" }))),
+      ),
+    );
+    const serverIds = [...markup.matchAll(/<input id="([^"]+)"/g)].map((match) => match[1]);
+    expect(serverIds).toHaveLength(2);
+    expect(new Set(serverIds).size).toBe(2);
+    const errors = spyErrors();
+    await mount(markup);
+    expect(errors()).toEqual([]);
+    const held = [...document.querySelectorAll("[data-held]")].map((node) => node.textContent);
+    expect(held).toEqual(serverIds);
+  });
+
+  it("match when the browser hydrates the wrapped export", async () => {
+    const markup = await html(
+      h(
+        "main",
+        null,
+        h("ul", null, h("li", null, "a"), h("li", null, h(FieldIsland, { label: "w" }))),
+      ),
+    );
+    const serverId = /<input id="([^"]+)"/.exec(markup)![1];
+    const errors = spyErrors();
+    await mount(markup, { load: async (src) => wrappedModules[src]! });
+    expect(errors()).toEqual([]);
+    expect(document.querySelector("[data-held]")!.textContent).toBe(serverId);
+  });
+});
+
+describe("element props in islands", () => {
+  it("render when the island shows one the server did not place", async () => {
+    const markup = await html(
+      h(TabsIsland, {
+        panels: [h("p", { key: "a" }, "panel a"), h("p", { key: "b" }, "panel b")],
+      }),
+    );
+    expect(markup).toContain("panel a");
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-next]")!.click());
+    expect(document.querySelector("[data-panel]")!.textContent).toBe("panel b");
+  });
+});
+
+describe("client components in an island's server output", () => {
+  it("read the island's context, through server components between them", async () => {
+    const markup = await html(
+      h(ThemeProviderIsland, null, h(ServerSection, null, h(ThemeLabelIsland))),
+    );
+    expect(markup).toContain('<f-slot name="');
+    expect(markup).toContain('type="f/tree"');
+    expect(markup).toContain("server text");
+    const errors = spyErrors();
+    await mount(markup);
+    expect(errors()).toEqual([]);
+    expect(document.querySelector("[data-theme]")!.textContent).toBe("light");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-theme-toggle]")!.click(),
+    );
+    expect(document.querySelector("[data-theme]")!.textContent).toBe("dark");
+    expect(document.querySelector("article p")!.textContent).toBe("server text");
+  });
+
+  it("keep their own state next to the island's", async () => {
+    const markup = await html(
+      h(
+        PanelIsland,
+        { title: "More" },
+        h("p", null, "plain"),
+        h(CounterIsland, { start: 0, label: "inside" }),
+      ),
+    );
+    await mount(markup);
+    const inside = () => document.querySelector<HTMLButtonElement>("[data-counter=inside]")!;
+    await act(async () => inside().click());
+    expect(inside().textContent).toBe("inside 1");
+  });
+
+  it("leave plain server HTML as HTML, with no tree", async () => {
+    const markup = await html(h(PanelIsland, { title: "More" }, h("p", null, "plain")));
+    expect(markup).not.toContain('type="f/tree"');
+  });
+});
+
 describe("promises in islands", () => {
   const later = <T>(value: T, ms = 10) =>
     new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
@@ -530,6 +682,48 @@ describe("actions in islands", () => {
       expect(document.querySelector("button")!.textContent).toBe("core:Ada");
     });
     expect(hoisted).toHaveBeenCalledWith(["core"], "Ada");
+  });
+
+  it("report a server form's submit to useFormStatus in an island inside it", async () => {
+    const save = async (_form: FormData) => {};
+    registerServerReference(save, "island-save");
+    function Submit() {
+      const { pending } = useFormStatus();
+      return h("button", { type: "submit", disabled: pending }, pending ? "saving" : "save");
+    }
+    modules["/src/submit.tsx"] = { Submit };
+    const SubmitIsland = createIsland(Submit, "/src/submit.tsx", "Submit");
+    const markup = await html(
+      h(
+        "form",
+        { action: save },
+        h("input", { name: "note", defaultValue: "hi" }),
+        h(SubmitIsland),
+      ),
+    );
+    expect(markup).toContain(">save</button>");
+    // The call stays in flight until released (jsdom's FormData does not reach a Node Request, so
+    // the server's side is the browser suite's to cover).
+    let release = () => {};
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      sent.push(String((init.body as FormData).get("note")));
+      await new Promise<void>((resolve) => (release = resolve));
+      return new Response(null, { status: 204 });
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    enhanceForms();
+    await mount(markup);
+    const button = () => document.querySelector("button")!;
+    await act(async () => button().click());
+    expect(button().textContent).toBe("saving");
+    expect(button().disabled).toBe(true);
+    expect(sent).toEqual(["hi"]);
+    await act(async () => release());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(button().textContent).toBe("save");
+    });
   });
 
   it("show useActionState's result after a form post, and hydrate with it", async () => {

@@ -1086,3 +1086,148 @@ export async function createServerTreeLayout(
     },
   };
 }
+
+/** Whether a resolved tree needs the browser to rebuild it: it holds anything but plain HTML. */
+function needsRebuild(value: TreeValue): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(needsRebuild);
+  if (value.$ === "c" || value.$ === "p" || value.$ === "x" || value.$ === "a") return true;
+  return Object.values(value).some(needsRebuild);
+}
+
+/** @internal An island's element prop, resolved on the server (see `createIsland`). */
+export interface SlotTree {
+  /** What renders where the island places the slot. */
+  element: React.ReactElement;
+  /** True when the browser rebuilds the slot from its payload; false for plain server HTML. */
+  rebuild: boolean;
+}
+
+/**
+ * @internal Resolves server output passed to an island. Plain HTML renders as it is, and the
+ * browser keeps it. Output holding client components (or Suspense, actions, server HTML parts)
+ * renders with its payload, scoped to the slot's name, so the browser rebuilds it inside the
+ * island's root: its client components are then the island's descendants and read its context,
+ * as in React Server Components.
+ */
+export async function renderSlotTree(
+  element: React.ReactNode,
+  scope: string,
+  held: ReadonlySet<string> | null,
+): Promise<SlotTree> {
+  const hook = getIslandServerHook();
+  if (!hook) throw new Error("islx: an island rendered without @farm.js/islx/react/server");
+  const state: ResolveState = {
+    nextId: 0,
+    components: new Map(),
+    serverHtml: new Map(),
+    chunks: new Map(),
+    actions: new Map(),
+  };
+  const tree = await resolveValue(state, element, { parserSensitive: false }, new Set());
+  const encode = (payload: Record<string, unknown>): { json: string; values: TreeValueScripts } => {
+    const addressed = hook.address(payload, held);
+    return {
+      json: hook.escape(addressed.json),
+      values: addressed.values.map((value) => [value.key, hook.escape(value.json)] as const),
+    };
+  };
+  const resolver: TreeResolver = {
+    component(reference, exportName) {
+      const Component = state.components.get(`${reference}#${exportName}`);
+      if (!Component)
+        throw new Error(`client reference ${reference}#${exportName} was not resolved`);
+      return Component;
+    },
+    chunk(id) {
+      const entry = state.chunks.get(id)!;
+      if (entry.chunk) return entry.chunk;
+      const chunk: ResolvedChunk = {
+        status: "pending",
+        promise: entry.encoded.then(
+          (encoded) => {
+            const payload = encode({ t: encoded });
+            chunk.value = React.createElement(
+              React.Fragment,
+              null,
+              createTreeValue(encoded, resolver) as React.ReactNode,
+              createTreeScript(
+                CHUNK_SCRIPT_TYPE,
+                scopedName(scope, id),
+                payload.json,
+                payload.values,
+              ),
+            );
+            chunk.status = "fulfilled";
+            return chunk.value;
+          },
+          (error) => {
+            chunk.status = "rejected";
+            chunk.reason = error;
+            throw error;
+          },
+        ),
+      };
+      chunk.promise.catch(() => {});
+      entry.chunk = chunk;
+      return chunk;
+    },
+    serverHtml(id, key) {
+      return React.createElement(
+        SERVER_HTML_TAG,
+        {
+          ...(key === null ? {} : { key }),
+          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
+          style: { display: "contents" },
+        },
+        isolateIslands(state.serverHtml.get(id) as React.ReactNode),
+      );
+    },
+    outlet() {
+      return null;
+    },
+    action(id) {
+      return state.actions.get(id);
+    },
+  };
+  const rendered = createTreeValue(tree, resolver) as React.ReactNode;
+  if (!needsRebuild(tree)) {
+    return { element: React.createElement(React.Fragment, null, rendered), rebuild: false };
+  }
+  const payload = encode({ v: 1, t: tree });
+  return {
+    element: React.createElement(
+      React.Fragment,
+      null,
+      rendered,
+      createTreeScript(TREE_SCRIPT_TYPE, scope, payload.json, payload.values),
+    ),
+    rebuild: true,
+  };
+}
+
+/**
+ * @internal Rebuilds a slot the server rendered with `renderSlotTree`, from `root` (the slot's
+ * element, or the template holding it) after loading its client modules. Null when the slot has no
+ * payload there.
+ */
+export async function createSlotTree(
+  root: ParentNode,
+  scope: string,
+  options: Omit<ServerTreeElementOptions, "key">,
+): Promise<React.ReactNode | null> {
+  const tree = await prepareTree(root, scope, options);
+  if (!tree) return null;
+  const resolver = tree.resolver();
+  const script = createTreeScript(TREE_SCRIPT_TYPE, scope, tree.json, tree.values);
+  const build = () =>
+    React.createElement(
+      React.Fragment,
+      null,
+      createTreeValue(tree.payload, resolver) as React.ReactNode,
+      script,
+    );
+  // Validate the whole tree now, so a missing chunk or module fails before hydration starts.
+  build();
+  return build();
+}

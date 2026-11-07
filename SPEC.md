@@ -29,9 +29,10 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 | Name | Meaning |
 | --- | --- |
 | `<f-island>` | A client component's server HTML. `src` names the module the browser imports (its path from the app root; the runtime maps it to a URL), `export` the component's export name, `props` the id of its props script, `strategy` when it hydrates: `load`, `idle`, `visible` or `interaction`. A hydrated island gets a `hydrated` attribute. |
-| `<script type="f/props" for>` | An island's props, as JSON. `for` names the island's `props` id. |
+| `<script type="f/props" for [ids]>` | An island's props, as JSON. `for` names the island's `props` id. `ids` is the `useId` React gave a probe the server renders first in the island, at index 0 of a two-child array whose second child is the component: its bits and length are the island's id position, which the browser rebuilds before it hydrates the component at index 1, so the component's `useId` calls match its HTML. Without it the browser hydrates with React's own ids. |
 | `<script type="f/value" name>` | A value sent once. `name` is its key. Written before the first island that uses it. |
-| `<f-slot name>` | Server output passed to an island as children. It stays server HTML; the island renders it in place. |
+| `<f-slot name>` | Server output passed to an island as children (or any element prop). Plain HTML stays server HTML, and the island renders it in place. Output holding client components, Suspense boundaries, actions or `<f-html>` parts carries a server tree (`<script type="f/tree" name>` named after the slot, inside it), which the browser rebuilds inside the island's root: its client components are the island's descendants and read its context. |
+| `<template for>` | After an island's props: the `<f-slot>`s the island did not place when the server rendered it (a closed panel, a tab not shown yet). `for` names the island's `props` id. The browser reads a slot from here when the island places it. |
 | `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree. |
 | `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree. |
 | `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
@@ -41,8 +42,8 @@ A value script's, props script's and promise script's JSON escapes `<`, U+2028 a
 
 ## JSON tags
 
-A tagged object is `{"$":tag}` or `{"$":tag,"v":data}`; an action may also carry `"b"`. An object
-with any other keys is data.
+A tagged object is `{"$":tag}` or `{"$":tag,"v":data}`; an action may also carry `"b"`, and a slot
+`"t":1` when it carries a server tree. An object with any other keys is data.
 
 | Tag | Stands for | Data |
 | --- | --- | --- |
