@@ -7,6 +7,10 @@ async function hydrated(page: Page) {
   await page.waitForFunction(
     () => document.querySelectorAll("f-island[strategy=load]:not([hydrated])").length === 0,
   );
+  // Client navigation listens once startNavigation has marked the history entry. A page whose
+  // islands all wait for a click has none left to hydrate, so that is the readiness signal: a
+  // link clicked before it is a document load, as before JavaScript runs.
+  await page.waitForFunction(() => (history.state as { islx?: boolean } | null)?.islx === true);
 }
 
 function collectErrors(page: Page): string[] {
