@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.9
 
 Islands behave as React Server Components do in four cases they did not.
 
