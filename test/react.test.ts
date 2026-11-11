@@ -364,6 +364,26 @@ describe("islands", () => {
     });
   });
 
+  it("replay every click made while a deferred island loads, in order", async () => {
+    const LazyCounter = createIsland(Counter, "/src/counter.tsx", "Counter", "interaction");
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => (release = resolve));
+    const islands = await mount(await html(h(LazyCounter, { start: 0, label: "twice" })), {
+      load: async (src) => (await loaded, modules[src]!),
+    });
+    const button = document.querySelector<HTMLButtonElement>("[data-counter=twice]")!;
+    button.click();
+    button.click();
+    await act(async () => {
+      release();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+      expect(document.querySelector("[data-counter=twice]")!.textContent).toBe("twice 2");
+    });
+  });
+
   it("keep an island's state when the page renders again", async () => {
     const islands = await mount(
       await html(h("div", { id: "page" }, h(CounterIsland, { start: 0, label: "kept" }))),

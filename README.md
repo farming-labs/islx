@@ -48,7 +48,7 @@ import { transformActions } from "@farm.js/islx/compiler";
 - **React islands.** `createIsland` renders a client component as server HTML plus its props;
   `renderToStream` renders a page (leaving out values the browser holds); the hydration runtime
   starts each island as its own root when its strategy says (`load`, `idle`, `visible`,
-  `interaction`, which holds the first click or submit and replays it), restores the server HTML
+  `interaction`, which holds each click or submit made while it loads and replays them in order), restores the server HTML
   if an island fails, keeps island state when the page renders again, and hydrates
   `useActionState` with the form post's result.
 - **Compiler.** A pure function from source to source for each environment, with errors that

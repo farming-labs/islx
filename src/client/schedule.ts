@@ -5,8 +5,9 @@
  * - `idle`: when the browser is idle, or after 2 seconds.
  * - `visible`: when the island comes within 200px of the viewport.
  * - `interaction`: on the first click, submit, pointerdown or focus inside it. A click or a
- *   submit is held while the island's code loads, then replayed on the hydrated island, so the
- *   user's first action is not lost.
+ *   submit is held while the island's code loads, then replayed on the hydrated island, so no
+ *   action is lost: every click made while it loads is replayed, in order. A form is submitted
+ *   once, however often it was submitted while loading.
  *
  * Until it hydrates, an island is its server HTML: links and native forms keep working.
  */
@@ -132,17 +133,24 @@ function replay({ target, kind }: Interaction): void {
   else target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }
 
-function finish(container: Element, held: Interaction | null): void {
-  // What this runtime held, and what the inline script held before it ran.
-  const interactions = new Map<Element, Interaction>();
-  if (held) interactions.set(held.target, held);
+/** Whether replaying `target` submits a form: a held submit, or a click on a submit button. */
+function submitsForm({ target, kind }: Interaction): boolean {
+  if (kind === "submit") return true;
+  const control = target as Element & { form?: HTMLFormElement | null; type?: string };
+  return !!control.form && control.type === "submit";
+}
+
+function finish(container: Element, held: readonly Interaction[]): void {
+  // What the inline script held before this runtime ran, then what the runtime held. Every click
+  // is replayed, as it would have run on a hydrated island: two clicks on a counter count two.
+  const interactions: Interaction[] = [];
   for (const pending of takePendingInteractions(container)) {
-    if (pending.kind)
-      interactions.set(pending.target, { target: pending.target, kind: pending.kind });
+    if (pending.kind) interactions.push({ target: pending.target, kind: pending.kind });
   }
+  interactions.push(...held);
   if (!container.isConnected) return;
   container.setAttribute(HYDRATED_ATTRIBUTE, "");
-  for (const interaction of interactions.values()) {
+  for (const interaction of interactions) {
     // After React has attached its handlers in this task.
     window.setTimeout(() => {
       if (
@@ -177,7 +185,7 @@ export function scheduleHydration<T>({
       .then(() => (signal?.aborted ? undefined : hydrate()))
       .then((value) => {
         if (signal?.aborted) return undefined;
-        finish(container, null);
+        finish(container, []);
         return value;
       });
   }
@@ -185,7 +193,7 @@ export function scheduleHydration<T>({
   return new Promise<T | undefined>((resolve, reject) => {
     let started = false;
     let cancelled = false;
-    let held: Interaction | null = null;
+    const held: Interaction[] = [];
     // One-shot triggers, dropped as soon as hydration starts.
     const triggers = new Set<() => void>();
     // Interaction capture, kept until hydration finishes: a pointerdown starts it, and the click
@@ -258,7 +266,12 @@ export function scheduleHydration<T>({
     }
 
     const hold = (event: Event, target: Element, kind: ReplayKind) => {
-      held ??= { target, kind };
+      const interaction = { target, kind };
+      // A form is submitted once: a repeat is held, so it never posts natively ahead of the
+      // replay, and not held again.
+      if (!submitsForm(interaction) || !held.some((item) => item.target === target)) {
+        held.push(interaction);
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       start();
