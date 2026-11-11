@@ -59,6 +59,8 @@ interface RootRecord {
   src: string;
   exportName: string;
   props: Record<string, unknown>;
+  /** The props as the server sent them, to find the same island in a later render. */
+  wire: string;
   serverHTML: string;
   restore(error: unknown): void;
   dispose(): void;
@@ -516,6 +518,12 @@ export function createHydrationRuntime(options: HydrationOptions) {
     Array.from(scope.querySelectorAll<Element>(ISLAND_SELECTOR)).filter(
       (container) => !container.parentElement?.closest(ISLAND_SELECTOR),
     );
+  /**
+   * An island's props as the server sent them, without its own id: the names of its slots start
+   * with that id, which follows the island's position, so the same item moved keeps the same text.
+   */
+  const wireOf = (container: Element, id: string) =>
+    (findPropsScript(container, id)?.textContent ?? "").split(id).join("");
   const keyOf = (container: Element) =>
     `${container.getAttribute("src")}#${container.getAttribute("export") || "default"}`;
 
@@ -636,6 +644,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
                   src,
                   exportName,
                   props,
+                  wire: wireOf(container, id),
                   serverHTML,
                   restore,
                   dispose() {
@@ -676,9 +685,11 @@ export function createHydrationRuntime(options: HydrationOptions) {
 
   /**
    * Keeps the live islands of `current` when the same page renders again (after an action, or
-   * a refresh): each island of `next` that renders the same component at the same position takes
-   * over the live root with its new props, so its state survives. Call it before replacing
-   * `current`; islands it does not carry over hydrate from `next` as usual.
+   * a refresh): each island of `next` takes over a live root of the same component with its new
+   * props, so its state survives. React keeps state by key, which the browser never sees: an
+   * island whose props are unchanged takes the live island with those props first (an item that
+   * stays in a list while others are removed or move), and the rest pair up in document order.
+   * Call it before replacing `current`; islands it does not carry over hydrate from `next` as usual.
    */
   function carryOver(current: ParentNode, next: ParentNode): number {
     const live = new Map<string, Element[]>();
@@ -687,11 +698,29 @@ export function createHydrationRuntime(options: HydrationOptions) {
       const key = keyOf(container);
       live.set(key, [...(live.get(key) ?? []), container]);
     }
-    let carried = 0;
-    for (const container of topLevel(next)) {
-      const previous = live.get(keyOf(container))?.shift();
-      const record = previous && roots.get(previous);
+    const incoming = topLevel(next).map((container) => {
       const id = container.getAttribute("props");
+      return { container, id, wire: id ? wireOf(container, id) : "" };
+    });
+    const pairs = new Map<Element, Element>();
+    const take = (key: string, matches: (previous: Element) => boolean) => {
+      const candidates = live.get(key);
+      const index = candidates ? candidates.findIndex(matches) : -1;
+      return index < 0 ? undefined : candidates!.splice(index, 1)[0];
+    };
+    for (const { container, wire } of incoming) {
+      const previous = take(keyOf(container), (candidate) => roots.get(candidate)?.wire === wire);
+      if (previous) pairs.set(container, previous);
+    }
+    for (const { container } of incoming) {
+      if (pairs.has(container)) continue;
+      const previous = take(keyOf(container), () => true);
+      if (previous) pairs.set(container, previous);
+    }
+    let carried = 0;
+    for (const { container, id, wire } of incoming) {
+      const previous = pairs.get(container);
+      const record = previous && roots.get(previous);
       if (!previous || !record || !id) continue;
       try {
         const props = readProps(container, id);
@@ -699,6 +728,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
           element(previous, record.Component, props, record.restore, record.position),
         );
         record.props = props;
+        record.wire = wire;
         container.replaceWith(previous);
         carried++;
       } catch (error) {
