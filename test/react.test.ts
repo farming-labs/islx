@@ -383,6 +383,48 @@ describe("islands", () => {
     expect(document.querySelector("[data-counter=kept]")!.textContent).toBe("kept 1");
   });
 
+  it("wait for a streamed island's props, which arrive after it, instead of failing", async () => {
+    const markup = await html(h(CounterIsland, { start: 0, label: "late" }));
+    const props = markup.match(/<script type="f\/props"[^>]*>.*?<\/script>/)![0];
+    document.body.innerHTML = markup.replace(props, "");
+    // The stream has written the island and not yet its props.
+    const readyState = vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const report = vi.fn();
+    let loads = 0;
+    const islands = runtime({
+      report,
+      load: async (src) => (loads++, modules[src]!),
+    });
+    try {
+      await act(async () => {
+        await islands.hydrate(document);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(report).not.toHaveBeenCalled();
+      expect(islands.rootCount()).toBe(0);
+
+      await act(async () => {
+        document.querySelector("f-island")!.insertAdjacentHTML("afterend", props);
+      });
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(islands.rootCount()).toBe(1);
+      });
+      readyState.mockReturnValue("complete");
+      await act(async () => {
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+      });
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>("[data-counter=late]")!.click(),
+      );
+      expect(document.querySelector("[data-counter=late]")!.textContent).toBe("late 1");
+      expect(report).not.toHaveBeenCalled();
+      expect(loads).toBe(1);
+    } finally {
+      readyState.mockRestore();
+    }
+  });
+
   it("render without hydrating when props cannot travel, and say why", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const markup = await html(

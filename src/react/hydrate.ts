@@ -354,6 +354,17 @@ const PENDING_BOUNDARY = "$?";
  * only while the document loads; later (a navigation that streams) it would render it again in
  * the browser, so the island hydrates once React has revealed it.
  */
+/**
+ * True while the document still streams and the island's props, which the server writes after
+ * it, have not arrived: the island waits for them. Hydrating now fails, and restoring its server
+ * HTML is a change the stream watcher answers with another pass, which fails again.
+ */
+function awaitsProps(container: Element): boolean {
+  if (container.ownerDocument.readyState !== "loading") return false;
+  const id = container.getAttribute("props");
+  return !!id && !findPropsScript(container, id);
+}
+
 function awaitsStreamedContent(container: Element): boolean {
   const document = container.ownerDocument;
   if (document.readyState === "loading") return false;
@@ -536,7 +547,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
         !pending.has(container) &&
         !insideAnotherIsland(container, scope) &&
         !container.closest(STREAM_STAGING) &&
-        !awaitsStreamedContent(container),
+        !awaitsStreamedContent(container) &&
+        !awaitsProps(container),
     );
 
     await Promise.all(
