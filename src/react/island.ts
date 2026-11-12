@@ -234,6 +234,8 @@ function splitSlots(
   value: unknown,
   prefix: string,
   slots: IslandSlots,
+  // The objects above `value`: one that contains itself is left whole, and the encoder reports it.
+  ancestors: Set<object> = new Set(),
 ): { render: unknown; wire: unknown } {
   if (isElement(value)) {
     const name = `${prefix}${slots.next++}`;
@@ -246,20 +248,27 @@ function splitSlots(
       wire: reference,
     };
   }
+  if (value && typeof value === "object" && ancestors.has(value)) {
+    return { render: value, wire: value };
+  }
   if (Array.isArray(value)) {
-    const parts = value.map((entry) => splitSlots(entry, prefix, slots));
+    ancestors.add(value);
+    const parts = value.map((entry) => splitSlots(entry, prefix, slots, ancestors));
+    ancestors.delete(value);
     return { render: parts.map((part) => part.render), wire: parts.map((part) => part.wire) };
   }
   if (value && typeof value === "object") {
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
+    ancestors.add(value);
     const render: Record<string, unknown> = {};
     const wire: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      const part = splitSlots(entry, prefix, slots);
+      const part = splitSlots(entry, prefix, slots, ancestors);
       render[key] = part.render;
       wire[key] = part.wire;
     }
+    ancestors.delete(value);
     return { render, wire };
   }
   return { render: value, wire: value };

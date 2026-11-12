@@ -175,6 +175,11 @@ const modules: Record<string, Record<string, unknown>> = {
 };
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
+const NodeIsland = createIsland(
+  ({ node }: { node: { name: string } }) => h("output", null, node.name),
+  "/src/node.tsx",
+  "Node",
+);
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
@@ -504,6 +509,16 @@ describe("islands", () => {
     );
     expect(markup).not.toContain("<f-island");
     expect(warn.mock.calls[0]![0]).toContain("functions are not serializable");
+  });
+
+  it("render without hydrating when a prop refers to itself, instead of overflowing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const node: { name: string; self?: unknown } = { name: "root" };
+    node.self = node;
+    const markup = await html(h(NodeIsland, { node }));
+    expect(markup).toContain("<output>root</output>");
+    expect(markup).not.toContain("<f-island");
+    expect(warn.mock.calls[0]![0]).toContain("circular values are not serializable");
   });
 });
 
