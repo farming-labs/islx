@@ -157,9 +157,13 @@ export async function handleAction(
     resolved: Extract<ResolvedAction, { ok: true }>,
     id: string,
     args: unknown[],
+    /** Renders the elements in the result, for a call from JavaScript. */
+    render?: (result: unknown) => Promise<unknown>,
   ): Promise<{ result: unknown } | { error: unknown; outcome?: ActionErrorOutcome }> => {
     const info: ActionInfo = { request, ...describeAction(id, resolved.label) };
-    const invoke = () => resolved.run(args);
+    // Elements render inside the action's run, so server components in them read the request's
+    // context, and a framework that wraps the result wraps the rendered one, once.
+    const invoke = render ? async () => render(await resolved.run(args)) : () => resolved.run(args);
     try {
       return {
         result: await run(request, hooks.action ? () => hooks.action!(info, invoke) : invoke),
@@ -251,27 +255,13 @@ export async function handleAction(
         ? text(400, "Bad Request")
         : text(resolved.reason === "unknown" ? 404 : 409, "Stale Action", STALE);
     }
-    const ran = await execute(resolved, id, args);
+    const ran = await execute(resolved, id, args, getActionResultRenderer());
     if ("error" in ran) {
       if (ran.outcome?.redirect) return json({ redirect: ran.outcome.redirect });
       if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
       return text(500, "Server action failed");
     }
-    // Elements render in the request's context, as the action ran, so server components in them
-    // read it.
-    const render = getActionResultRenderer();
-    let result = ran.result;
-    if (render) {
-      try {
-        result = await run(request, () => render(ran.result));
-      } catch (error) {
-        (
-          options.onError ??
-          ((reason: unknown) => console.error("[islx] Server action failed:", reason))
-        )(error);
-        return text(500, "Server action failed");
-      }
-    }
+    const result = ran.result;
     try {
       return json({
         result: encode(result, {
