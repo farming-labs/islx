@@ -38,6 +38,25 @@ describe("the pre-hydration script", () => {
     expect(queue()).toHaveLength(1);
   });
 
+  it("holds every click on a control in a waiting island, in order", () => {
+    document.body.innerHTML =
+      '<f-island strategy="interaction"><button type="button">Add</button><button type="button">Undo</button></f-island>';
+    const [add, undo] = Array.from(document.querySelectorAll("button"));
+    expect(click(add!)).toBe(true);
+    expect(click(add!)).toBe(true);
+    expect(click(undo!)).toBe(true);
+    expect(queue().map((item) => item.target)).toEqual([add, add, undo]);
+  });
+
+  it("holds a repeated click on a submit button, and queues it once", () => {
+    document.body.innerHTML =
+      '<f-island strategy="interaction"><form><button>Save</button></form></f-island>';
+    const save = document.querySelector("button")!;
+    expect(click(save)).toBe(true);
+    expect(click(save)).toBe(true);
+    expect(queue().map((item) => item.target)).toEqual([save]);
+  });
+
   it("lets a click in a hydrated island through", () => {
     document.body.innerHTML =
       '<f-island strategy="interaction" hydrated><a href="#a">A</a></f-island>';
