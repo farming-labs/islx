@@ -5,12 +5,13 @@
  */
 import * as React from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
-import { createServerReference } from "../client/actions";
+import { createServerReference, setActionElementReviver } from "../client/actions";
 import { emit } from "../client/hooks";
 import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
 import {
+  HTML_ELEMENT,
   ACTION_TAG,
   ID_POSITION_ATTRIBUTE,
   HYDRATED_ATTRIBUTE,
@@ -483,6 +484,23 @@ export function createHydrationRuntime(options: HydrationOptions) {
 
   // Renders the server HTML parts of slot trees, and hydrates the islands inside them.
   const ServerHtml = createServerHtml({ hydrate, dispose });
+  // Elements an action returns rebuild as a slot's tree does: their client components are live.
+  setActionElementReviver(async ({ s: scope, h: html }) => {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const tree = await createSlotTree(template.content, scope, {
+      load: options.load,
+      ServerHtml,
+      values,
+    });
+    return (
+      tree ??
+      React.createElement(HTML_ELEMENT, {
+        style: { display: "contents" },
+        dangerouslySetInnerHTML: { __html: html },
+      })
+    );
+  });
 
   /** Rebuilds the server trees of an island's slots, loading their client modules. */
   async function prepareSlots(container: Element, id: string): Promise<void> {

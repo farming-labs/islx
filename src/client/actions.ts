@@ -16,11 +16,13 @@ import {
   BLOB_TAG,
   BOUND_FIELD,
   CALL_FIELD,
+  ELEMENT_TAG,
   FORM_DATA_TAG,
   attachmentField,
   TAG,
   TAG_BOUND,
   TAG_VALUE,
+  getTag,
 } from "../protocol/wire";
 
 type AnyFunction = (...args: any[]) => any;
@@ -112,6 +114,56 @@ export function decodeActionReference(object: Record<string, unknown>): AnyFunct
   return createServerReference(object[TAG_VALUE], token);
 }
 
+/** Elements an action returned, as the server rendered them (`ELEMENT_TAG`). */
+export interface RenderedElementsPayload {
+  /** The scope of their server tree. */
+  s: string;
+  /** Their server HTML, with the tree. */
+  h: string;
+}
+
+const ELEMENT_REVIVER = Symbol.for("islx.client.element-reviver");
+
+/**
+ * @internal Rebuilds the elements an action returned. The React hydration runtime installs it,
+ * with the module loader it hydrates islands with.
+ */
+export function setActionElementReviver(
+  revive: (payload: RenderedElementsPayload) => Promise<unknown>,
+): void {
+  (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] = revive;
+}
+
+/** The elements in a result, rebuilt, by the payload object that carried them. */
+async function reviveElements(value: unknown): Promise<Map<object, unknown>> {
+  const found: Record<string, unknown>[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    if (getTag(node) === ELEMENT_TAG) {
+      found.push(node as Record<string, unknown>);
+      return;
+    }
+    for (const entry of Array.isArray(node) ? node : Object.values(node)) walk(entry);
+  };
+  walk(value);
+  const revived = new Map<object, unknown>();
+  if (found.length === 0) return revived;
+  const revive = (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] as
+    | ((payload: RenderedElementsPayload) => Promise<unknown>)
+    | undefined;
+  if (!revive) throw new Error("the action returned elements, which need islx's React runtime");
+  await Promise.all(
+    found.map(async (object) => {
+      const payload = object[TAG_VALUE] as RenderedElementsPayload;
+      if (!payload || typeof payload.s !== "string" || typeof payload.h !== "string") {
+        throw new TypeError("malformed elements in the action's result");
+      }
+      revived.set(object, await revive(payload));
+    }),
+  );
+  return revived;
+}
+
 /** Returned by a call whose action this deploy no longer knows: the page reloads. */
 const STALE: unique symbol = Symbol("islx.action.stale");
 
@@ -178,7 +230,11 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     else location.assign(payload.redirect);
     return undefined;
   }
-  const result = decode(payload.result, { decodeReference: decodeActionReference });
+  const elements = await reviveElements(payload.result);
+  const result = decode(payload.result, {
+    decodeReference: (object) =>
+      elements.has(object) ? elements.get(object) : decodeActionReference(object),
+  });
   // The caller's pending state (`useFormStatus`, `useActionState`) lasts until the page shows
   // what the action changed.
   if (navigator.refresh) await navigator.refresh();

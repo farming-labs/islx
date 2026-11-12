@@ -14,6 +14,7 @@ import {
   BLOB_TAG,
   BOUND_FIELD,
   CALL_FIELD,
+  ELEMENT_TAG,
   FORM_DATA_TAG,
   FORM_REF_PREFIX,
   REFERENCE_TAG,
@@ -33,6 +34,38 @@ import {
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
+
+const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
+
+/** @internal Elements an action returned, rendered: their scope and server HTML (`ELEMENT_TAG`). */
+export class RenderedElements {
+  // A brand, not \`instanceof\`: the React adapter may load another copy of this module.
+  readonly [RENDERED_ELEMENTS] = true;
+  constructor(
+    readonly scope: string,
+    readonly html: string,
+  ) {}
+}
+
+function isRenderedElements(value: object): value is RenderedElements {
+  return (value as Record<symbol, unknown>)[RENDERED_ELEMENTS] === true;
+}
+
+const RESULT_RENDERER = Symbol.for("islx.server.result-renderer");
+
+/**
+ * @internal Renders the React elements in an action's result into `RenderedElements`.
+ * `@farm.js/islx/react/server` installs it; without it, a result with elements does not serialize.
+ */
+export function setActionResultRenderer(render: (value: unknown) => Promise<unknown>): void {
+  (globalThis as Record<symbol, unknown>)[RESULT_RENDERER] = render;
+}
+
+function getActionResultRenderer(): ((value: unknown) => Promise<unknown>) | undefined {
+  return (globalThis as Record<symbol, unknown>)[RESULT_RENDERER] as
+    | ((value: unknown) => Promise<unknown>)
+    | undefined;
+}
 
 /** React's form state: the result, the hook it belongs to, the action id, its bound count. */
 export type ReactFormState = [state: unknown, key: string, referenceId: string, boundCount: number];
@@ -224,8 +257,31 @@ export async function handleAction(
       if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
       return text(500, "Server action failed");
     }
+    // Elements render in the request's context, as the action ran, so server components in them
+    // read it.
+    const render = getActionResultRenderer();
+    let result = ran.result;
+    if (render) {
+      try {
+        result = await run(request, () => render(ran.result));
+      } catch (error) {
+        (
+          options.onError ??
+          ((reason: unknown) => console.error("[islx] Server action failed:", reason))
+        )(error);
+        return text(500, "Server action failed");
+      }
+    }
     try {
-      return json({ result: encode(ran.result, { encodeFunction: encodeActionReference }) });
+      return json({
+        result: encode(result, {
+          encodeFunction: encodeActionReference,
+          encodeObject: (value) =>
+            isRenderedElements(value)
+              ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
+              : undefined,
+        }),
+      });
     } catch (error) {
       (
         options.onError ??

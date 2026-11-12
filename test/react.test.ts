@@ -798,6 +798,89 @@ describe("actions in islands", () => {
     expect(hoisted).toHaveBeenCalledWith(["core"], "Ada");
   });
 
+  it("show the elements an action returns, with their client components live", async () => {
+    const errors = spyErrors();
+    const saved = vi.fn();
+    const save = async () => {
+      saved();
+      return {
+        note: h("p", { "data-note": "" }, "saved ", h(CounterIsland, { start: 1, label: "r" })),
+      };
+    };
+    registerServerReference(save, "island-save-element");
+    function Saver({ action }: { action: typeof save }) {
+      const [note, setNote] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-save": "", onClick: async () => setNote((await action()).note) },
+          "save",
+        ),
+        note,
+      );
+    }
+    modules["/src/saver.tsx"] = { Saver };
+    const SaverIsland = createIsland(Saver, "/src/saver.tsx", "Saver");
+    const markup = await html(h(SaverIsland, { action: save }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-save]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-note]")?.textContent).toBe("saved r 1");
+    });
+    expect(saved).toHaveBeenCalledTimes(1);
+    const counter = document.querySelector<HTMLButtonElement>("[data-counter=r]")!;
+    await act(async () => counter.click());
+    expect(counter.textContent).toBe("r 2");
+    expect(errors()).toEqual([]);
+  });
+
+  it("show server-only elements an action returns, after their async components ran", async () => {
+    async function Total() {
+      await Promise.resolve();
+      return h("strong", null, "3 items");
+    }
+    const count = async () => [h("em", { key: "a" }, "counted:"), h(Total, { key: "b" })];
+    registerServerReference(count, "island-count-element");
+    function Counts({ action }: { action: typeof count }) {
+      const [shown, setShown] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h("button", { "data-count": "", onClick: async () => setShown(await action()) }, "count"),
+        h("output", null, shown),
+      );
+    }
+    modules["/src/counts.tsx"] = { Counts };
+    const CountsIsland = createIsland(Counts, "/src/counts.tsx", "Counts");
+    const markup = await html(h(CountsIsland, { action: count }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-count]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("output")!.textContent).toBe("counted:3 items");
+    });
+    expect(document.querySelector("output strong")!.textContent).toBe("3 items");
+  });
+
   it("report a server form's submit to useFormStatus in an island inside it", async () => {
     const save = async (_form: FormData) => {};
     registerServerReference(save, "island-save");

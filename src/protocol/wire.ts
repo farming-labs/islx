@@ -59,6 +59,12 @@ export const SLOT_TAG = "s";
  * after the slot) that the browser rebuilds inside the island, instead of keeping its HTML.
  */
 export const SLOT_TREE_FIELD = "t";
+/**
+ * \`{"$":"x","v":{"s":scope,"h":html}}\`: React elements an action returned. \`h\` is their server
+ * HTML, holding the server tree (\`<script type="f/tree" name>\` named \`scope\`) the browser rebuilds
+ * them from, so their client components are live, as React Server Components return them.
+ */
+export const ELEMENT_TAG = "x";
 /** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
 export const ACTION_TAG = "a";
 /**
