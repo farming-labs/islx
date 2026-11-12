@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.11
+
+Islands behave as React Server Components do in two more cases, and one prop no longer breaks a
+page.
+
+- A server action can return React elements (JSX), alone or inside arrays and plain objects. They
+  render on the server as a server tree, so client components in them are live in the browser and
+  async server components have run. Before, the action ran and then answered 500.
+- A client component that clones its server child (`asChild`, Radix's `Slot`, `cloneElement`)
+  gives its props to that child when the child is one host element, instead of to the `<f-slot>`
+  around it. The child gets the classes, state attributes, handlers and ref, as under React Server
+  Components.
+- An island whose prop refers to itself renders without hydration, with the reason in a warning,
+  as any prop that cannot be sent does. Before, the render overflowed the stack.
+
 ## 0.0.10
 
 Islands keep the right state and every click, in three cases they did not.
@@ -122,8 +137,8 @@ Server layouts as trees.
 
 - A server layout around a client provider renders as a server tree, so a framework no longer
   ships the layout's module to hydrate it. On the server, `renderServerTree(layout, { outlets,
-  scope })` with `<Outlet />` where the page goes; in the browser, `createServerTreeLayout(source,
-  scope, { load, ServerHtml, onUpdate })` and `layout.render({ children: page })`. Rendering it
+scope })` with `<Outlet />` where the page goes; in the browser, `createServerTreeLayout(source,
+scope, { load, ServerHtml, onUpdate })` and `layout.render({ children: page })`. Rendering it
   again with another page keeps the provider's state.
 - A layout's tree names its payload, chunks and server HTML by its scope (`f/chunk name="/:0"`),
   so it and the page's tree at its outlet never read each other's parts. New tag `L` (outlet).
