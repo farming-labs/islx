@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.12
+
+Two fixes for frameworks on islx.
+
+- A server action that returns elements, under a framework whose `run` wraps the result, now
+  sends that result wrapped once. Before, the elements rendered through `run` a second time and
+  the browser got the wrapper as the value.
+- The browser's value store keeps the values a page has not used yet when it grows past its
+  limit. It drops the oldest resolved values instead of all of them, so an island that hydrates
+  late still finds its props.
+
 ## 0.0.11
 
 Islands behave as React Server Components do in two more cases, and one prop no longer breaks a
