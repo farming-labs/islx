@@ -929,6 +929,55 @@ describe("actions in islands", () => {
     expect(document.querySelector("output strong")!.textContent).toBe("3 items");
   });
 
+  it("render the elements an action returns inside the framework's run, once", async () => {
+    const runs = vi.fn();
+    const label = async () => h("em", { "data-label": "" }, "labelled");
+    registerServerReference(label, "island-label-element");
+    function Labeller({ action }: { action: () => Promise<unknown> }) {
+      const [shown, setShown] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          {
+            "data-label-button": "",
+            onClick: async () => setShown(((await action()) as { value: ReactNode }).value),
+          },
+          "label",
+        ),
+        h("output", null, shown),
+      );
+    }
+    modules["/src/labeller.tsx"] = { Labeller };
+    const LabellerIsland = createIsland(Labeller, "/src/labeller.tsx", "Labeller");
+    const markup = await html(h(LabellerIsland, { action: label }));
+    // A framework's run that wraps what the action returned, as Farm's does.
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+        {
+          run: async <T>(_request: Request, action: () => Promise<T>) => {
+            runs();
+            return { value: await action() } as T;
+          },
+        },
+      ),
+    );
+    await mount(markup);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-label-button]")!.click(),
+    );
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("output [data-label]")?.textContent).toBe("labelled");
+    });
+    expect(runs).toHaveBeenCalledTimes(1);
+  });
+
   it("report a server form's submit to useFormStatus in an island inside it", async () => {
     const save = async (_form: FormData) => {};
     registerServerReference(save, "island-save");
