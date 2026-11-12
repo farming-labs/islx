@@ -312,14 +312,23 @@ function createReference(reference: ClientReference): AnyFunction {
   return fn;
 }
 
+/** How many references are kept for identity; older ones a page stopped using are dropped. */
+const MAX_REFERENCES = 1000;
+
 /** The function that calls a server action; one per id and sealed values, so props keep identity. */
 export function createServerReference(id: string, token?: string, name?: string): AnyFunction {
   const key = token === undefined ? id : `${id}\0${token}`;
   const references = state().references;
   let reference = references.get(key);
-  if (!reference) {
+  if (reference) {
+    // Most recently used last, so the oldest is the one a page stopped using.
+    references.delete(key);
+  } else {
     reference = createReference({ id, token, bound: [], name });
-    references.set(key, reference);
+    if (references.size >= MAX_REFERENCES) {
+      references.delete(references.keys().next().value!);
+    }
   }
+  references.set(key, reference);
   return reference;
 }
