@@ -139,6 +139,30 @@ describe("held values", () => {
     expect(valueHeaders()).toEqual({});
   });
 
+  it("keeps the values a page has not used yet when the store grows past its limit", () => {
+    const store = createValueStore();
+    const scripts = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => {
+        const value = `value ${from + index}`;
+        return `<script type="f/value" name="${hashValue(value)}">${JSON.stringify(value)}</script>`;
+      }).join("");
+    const ingest = (html: string) =>
+      store.ingest(Object.assign(document.createElement("div"), { innerHTML: html }));
+    // A page whose islands wait: their values are stored, not used yet.
+    ingest(scripts(0, 10));
+    // Many values that islands used, from later navigations.
+    ingest(scripts(10, 1100));
+    for (let index = 10; index < 1110; index++) {
+      store.resolve({ $: "r", v: hashValue(`value ${index}`) });
+    }
+    const header = store.heldHeader()!;
+    // The waiting islands still find theirs, and the header still names what the browser holds.
+    expect(store.resolve({ $: "r", v: hashValue("value 0") })).toBe("value 0");
+    expect(header.split(",")).toHaveLength(128);
+    for (const key of header.split(","))
+      expect(() => store.resolve({ $: "r", v: key })).not.toThrow();
+  });
+
   it("refuses a value that refers to itself", () => {
     const store = createValueStore();
     const key = hashValue("x");

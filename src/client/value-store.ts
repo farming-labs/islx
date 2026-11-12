@@ -16,7 +16,11 @@ import {
 } from "../protocol/wire";
 import { setOwn } from "../protocol/codec";
 
-/** Past this many values the store starts over at the next navigation. */
+/**
+ * Past this many values the store forgets the oldest ones islands have used already, at the next
+ * navigation. It keeps values not used yet (islands still waiting on the page) and the most recent
+ * ones, which a header names, so a response that left them out still finds them.
+ */
 const MAX_STORED_VALUES = 1024;
 
 const STORE_KEY = Symbol.for("islx.values");
@@ -104,7 +108,13 @@ export function createValueStore(): ValueStore {
     },
     resolve,
     heldHeader() {
-      if (entries.size > MAX_STORED_VALUES) entries.clear();
+      if (entries.size > MAX_STORED_VALUES) {
+        const named = new Set([...entries.keys()].slice(-MAX_HELD_VALUES));
+        for (const [key, entry] of entries) {
+          if (entries.size <= MAX_STORED_VALUES) break;
+          if (entry.state === "resolved" && !named.has(key)) entries.delete(key);
+        }
+      }
       if (entries.size === 0) return undefined;
       return [...entries.keys()].slice(-MAX_HELD_VALUES).join(",");
     },
