@@ -43,7 +43,9 @@ A value script's, props script's and promise script's JSON escapes `<`, U+2028 a
 ## JSON tags
 
 A tagged object is `{"$":tag}` or `{"$":tag,"v":data}`; an action may also carry `"b"`, and a slot
-`"t":1` when it carries a server tree. An object with any other keys is data.
+`"t":1` when it carries a server tree, or `"h":{"t":tag,"p":props}` when it is plain HTML of one
+host element. A client component that clones such a slot (`asChild`) gives its props to that element,
+whose own props are `p`. An object with any other keys is data.
 
 | Tag | Stands for | Data |
 | --- | --- | --- |
