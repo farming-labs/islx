@@ -403,6 +403,100 @@ describe("islands", () => {
     expect(document.querySelector("[data-counter=kept]")!.textContent).toBe("kept 1");
   });
 
+  it("wait for a streamed island's props, which arrive after it, instead of failing", async () => {
+    const markup = await html(h(CounterIsland, { start: 0, label: "late" }));
+    const props = markup.match(/<script type="f\/props"[^>]*>.*?<\/script>/)![0];
+    document.body.innerHTML = markup.replace(props, "");
+    // The stream has written the island and not yet its props.
+    const readyState = vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const report = vi.fn();
+    let loads = 0;
+    const islands = runtime({
+      report,
+      load: async (src) => (loads++, modules[src]!),
+    });
+    try {
+      await act(async () => {
+        await islands.hydrate(document);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(report).not.toHaveBeenCalled();
+      expect(islands.rootCount()).toBe(0);
+
+      await act(async () => {
+        document.querySelector("f-island")!.insertAdjacentHTML("afterend", props);
+      });
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(islands.rootCount()).toBe(1);
+      });
+      readyState.mockReturnValue("complete");
+      await act(async () => {
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+      });
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>("[data-counter=late]")!.click(),
+      );
+      expect(document.querySelector("[data-counter=late]")!.textContent).toBe("late 1");
+      expect(report).not.toHaveBeenCalled();
+      expect(loads).toBe(1);
+    } finally {
+      readyState.mockRestore();
+    }
+  });
+
+  it("keep each island's state with its item when a list loses one, as React keys do", async () => {
+    const list = (labels: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        labels.map((label) => h(CounterIsland, { key: label, start: 0, label })),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    await act(async () => {
+      for (const label of ["a", "b", "c"]) {
+        document.querySelector<HTMLButtonElement>(`[data-counter=${label}]`)!.click();
+      }
+    });
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-counter=b]")!.click());
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-counter=b]")!.textContent).toBe("b 2");
+    expect(document.querySelector("[data-counter=c]")!.textContent).toBe("c 1");
+  });
+
+  it("keep an island with server children with its item when the list above it shrinks", async () => {
+    const list = (titles: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        titles.map((title) =>
+          h(PanelIsland, { key: title, title }, h("p", { "data-body": title }, `${title} body`)),
+        ),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    const toggle = (title: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("[data-toggle]")].find(
+        (button) => button.textContent === title,
+      )!;
+    await act(async () => toggle("b").click());
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    expect(document.querySelector("[data-body=c]")!.textContent).toBe("c body");
+  });
+
   it("render without hydrating when props cannot travel, and say why", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const markup = await html(
