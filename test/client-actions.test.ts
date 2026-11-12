@@ -34,6 +34,21 @@ afterEach(() => {
 });
 
 describe("client references", () => {
+  it("forget references the page stopped using, and keep the ones still in use", () => {
+    // Sealed values differ per render, so a long session would otherwise keep every one it saw.
+    const kept = createServerReference("kept-id", "kept-token");
+    const first = createServerReference("old-id", "old-token-0");
+    for (let index = 1; index <= 1500; index++) {
+      createServerReference("old-id", `old-token-${index}`);
+      if (index % 100 === 0) expect(createServerReference("kept-id", "kept-token")).toBe(kept);
+    }
+    expect(createServerReference("kept-id", "kept-token")).toBe(kept);
+    expect(createServerReference("old-id", "old-token-0")).not.toBe(first);
+    expect(createServerReference("old-id", "old-token-1500")).toBe(
+      createServerReference("old-id", "old-token-1500"),
+    );
+  });
+
   it("send typed arguments with the sealed values, and decode the result", async () => {
     const sent = mockFetch(() =>
       json({ result: { at: { $: "D", v: "2026-01-01T00:00:00.000Z" } } }),
