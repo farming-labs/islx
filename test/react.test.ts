@@ -425,6 +425,58 @@ describe("islands", () => {
     }
   });
 
+  it("keep each island's state with its item when a list loses one, as React keys do", async () => {
+    const list = (labels: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        labels.map((label) => h(CounterIsland, { key: label, start: 0, label })),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    await act(async () => {
+      for (const label of ["a", "b", "c"]) {
+        document.querySelector<HTMLButtonElement>(`[data-counter=${label}]`)!.click();
+      }
+    });
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-counter=b]")!.click());
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-counter=b]")!.textContent).toBe("b 2");
+    expect(document.querySelector("[data-counter=c]")!.textContent).toBe("c 1");
+  });
+
+  it("keep an island with server children with its item when the list above it shrinks", async () => {
+    const list = (titles: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        titles.map((title) =>
+          h(PanelIsland, { key: title, title }, h("p", { "data-body": title }, `${title} body`)),
+        ),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    const toggle = (title: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("[data-toggle]")].find(
+        (button) => button.textContent === title,
+      )!;
+    await act(async () => toggle("b").click());
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    expect(document.querySelector("[data-body=c]")!.textContent).toBe("c body");
+  });
+
   it("render without hydrating when props cannot travel, and say why", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const markup = await html(
