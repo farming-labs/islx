@@ -4,7 +4,7 @@
  */
 import * as React from "react";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
-import { encode } from "../protocol/codec";
+import { encode, plainObject } from "../protocol/codec";
 import {
   FORM_STATE_SCRIPT_TYPE,
   PROMISE_TAG,
@@ -16,7 +16,7 @@ import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
-import type { ReactFormState } from "../server/handle";
+import { RenderedElements, setActionResultRenderer, type ReactFormState } from "../server/handle";
 import {
   addressValues,
   escapeScriptJson,
@@ -24,6 +24,7 @@ import {
   selectValuesToSend,
 } from "../server/values";
 import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
+import { renderSlotTree } from "./tree";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
 // an earlier response never has two promises of one name. The random prefix is made at the first
@@ -167,6 +168,54 @@ export async function renderToStream(
   if (request?.headers.has(RENDER_HEADER)) await stream.allReady;
   return stream;
 }
+
+let resultScopes = 0;
+
+/**
+ * Renders elements an action returned as a slot's server tree, so the browser rebuilds them with
+ * their client components live. Each result gets a scope of its own.
+ */
+async function renderResultElements(element: React.ReactElement): Promise<RenderedElements> {
+  const scope = `x${(resultScopes++).toString(36)}`;
+  const tree = await renderSlotTree(element, scope, null);
+  const { render } = getContexts();
+  const { renderToReadableStream } = await import("react-dom/server");
+  const stream = await renderToReadableStream(
+    React.createElement(
+      render.Provider,
+      { value: { held: null, sent: new Set<string>() } },
+      tree.element,
+    ),
+  );
+  await stream.allReady;
+  return new RenderedElements(scope, await new Response(stream).text());
+}
+
+/** The value with each React element in it rendered; anything else stays as it is. */
+async function renderResult(value: unknown, ancestors = new Set<object>()): Promise<unknown> {
+  if (React.isValidElement(value)) return renderResultElements(value);
+  if (!value || typeof value !== "object" || ancestors.has(value)) return value;
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const entries = await Promise.all(value.map((entry) => renderResult(entry, ancestors)));
+      return entries.some((entry, index) => entry !== value[index]) ? entries : value;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const entries = await Promise.all(
+      Object.entries(value).map(
+        async ([key, entry]) => [key, entry, await renderResult(entry, ancestors)] as const,
+      ),
+    );
+    if (entries.every(([, entry, rendered]) => entry === rendered)) return value;
+    return plainObject(entries.map(([key, , rendered]) => [key, rendered]));
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+setActionResultRenderer(renderResult);
 
 /** Whether a response rendered for `request` leaves out values its browser holds. */
 export function isPersonalized(request: Request): boolean {

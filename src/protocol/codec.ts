@@ -23,6 +23,7 @@ import {
   OBJECT_TAG,
   PROMISE_TAG,
   REFERENCE_TAG,
+  ELEMENT_TAG,
   SLOT_TAG,
   TAG,
   TAG_VALUE,
@@ -149,6 +150,7 @@ export function decodeTagged(
   const data = object[TAG_VALUE];
   switch (tag) {
     case REFERENCE_TAG:
+    case ELEMENT_TAG:
     case SLOT_TAG:
     case ACTION_TAG:
     case FORM_DATA_TAG:

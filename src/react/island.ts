@@ -241,7 +241,7 @@ function Slot({
 }: { name: string; slots: IslandSlots } & Record<string, unknown>) {
   slots.placed.add(name);
   const tree = slots.trees.get(name);
-  // A clone (\`asChild\`) gives its props to the slot's element, as on the server of RSC.
+  // A clone (`asChild`) gives its props to the slot's element, as on the server of RSC.
   const content =
     tree?.host && Object.keys(given).length > 0
       ? React.cloneElement(tree.host.element, mergeSlotHostProps(tree.host.props, given))
