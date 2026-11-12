@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.13
+
+- The browser keeps at most 1000 server action references, dropping the least recently used. Each
+  action with captured values gets a new reference per render, so a long session kept every one
+  it saw. A reference still in use keeps its identity.
+
 ## 0.0.12
 
 Two fixes for frameworks on islx.
