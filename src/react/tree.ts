@@ -1101,6 +1101,40 @@ export interface SlotTree {
   element: React.ReactElement;
   /** True when the browser rebuilds the slot from its payload; false for plain server HTML. */
   rebuild: boolean;
+  /** Plain server HTML that is one host element: that element, which a clone gives its props. */
+  host?: SlotHost;
+}
+
+/** @internal A slot's one host element: its tag and its props, other than its children. */
+export interface SlotHost {
+  element: React.ReactElement<Record<string, unknown>>;
+  tag: string;
+  props: Record<string, unknown>;
+}
+
+const isPrimitive = (value: unknown): boolean =>
+  value === null || ["string", "number", "boolean"].includes(typeof value);
+
+/** The host element `node` is, when its props travel as JSON: strings, numbers, a style. */
+function getSlotHost(node: React.ReactNode): SlotHost | undefined {
+  if (!React.isValidElement(node) || typeof node.type !== "string") return undefined;
+  const props: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node.props as Record<string, unknown>)) {
+    if (key === "children" || value === undefined) continue;
+    if (key === "dangerouslySetInnerHTML" || key === "ref") return undefined;
+    if (key === "style") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+      if (!Object.values(value).every(isPrimitive)) return undefined;
+    } else if (!isPrimitive(value)) {
+      return undefined;
+    }
+    props[key] = value;
+  }
+  return {
+    element: node as React.ReactElement<Record<string, unknown>>,
+    tag: node.type,
+    props,
+  };
 }
 
 /**
@@ -1192,7 +1226,12 @@ export async function renderSlotTree(
   };
   const rendered = createTreeValue(tree, resolver) as React.ReactNode;
   if (!needsRebuild(tree)) {
-    return { element: React.createElement(React.Fragment, null, rendered), rebuild: false };
+    const host = getSlotHost(rendered);
+    return {
+      element: React.createElement(React.Fragment, null, rendered),
+      rebuild: false,
+      ...(host ? { host } : {}),
+    };
   }
   const payload = encode({ v: 1, t: tree });
   return {

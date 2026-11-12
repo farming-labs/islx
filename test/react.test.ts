@@ -2,6 +2,7 @@
 import {
   Suspense,
   act,
+  cloneElement,
   createContext,
   useContext,
   createElement as h,
@@ -10,6 +11,7 @@ import {
   useEffect,
   useId,
   useState,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -161,7 +163,18 @@ async function ServerSection({ children }: { children?: ReactNode }) {
   return h("article", null, h("p", null, "server text"), children);
 }
 
+// Clones its server child, as \`asChild\` components (Radix's Slot) do: the props land on the child.
+function Trigger({ children }: { children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return cloneElement(children as ReactElement<Record<string, unknown>>, {
+    className: "trigger",
+    "data-state": open ? "open" : "closed",
+    onClick: () => setOpen((value) => !value),
+  });
+}
+
 const modules: Record<string, Record<string, unknown>> = {
+  "/src/trigger.tsx": { Trigger },
   "/src/counter.tsx": { Counter },
   "/src/waits.tsx": { Waits },
   "/src/quote.tsx": { Quote },
@@ -174,7 +187,13 @@ const modules: Record<string, Record<string, unknown>> = {
   "/src/theme.tsx": { ThemeProvider, ThemeLabel },
 };
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
+const TriggerIsland = createIsland(Trigger, "/src/trigger.tsx", "Trigger");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
+const NodeIsland = createIsland(
+  ({ node }: { node: { name: string } }) => h("output", null, node.name),
+  "/src/node.tsx",
+  "Node",
+);
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
@@ -252,6 +271,25 @@ describe("islands", () => {
     expect(document.querySelector("[data-server]")).toBeNull();
     await act(async () => document.querySelector<HTMLButtonElement>("[data-toggle]")!.click());
     expect(document.querySelector("[data-server]")!.textContent).toBe("rendered on the server");
+  });
+
+  it("give the server child the props a client component clones onto it", async () => {
+    const errors = spyErrors();
+    const markup = await html(
+      h(TriggerIsland, null, h("button", { type: "button", className: "own" }, "Open")),
+    );
+    expect(markup).toContain(
+      '<button type="button" class="trigger own" data-state="closed">Open</button>',
+    );
+    await mount(markup);
+    const button = document.querySelector("button")!;
+    expect(document.querySelector("f-slot")!.hasAttribute("class")).toBe(false);
+    await act(async () => button.click());
+    expect(document.querySelector("button")).toBe(button);
+    expect(button.getAttribute("data-state")).toBe("open");
+    expect(button.className).toBe("trigger own");
+    expect(button.textContent).toBe("Open");
+    expect(errors()).toEqual([]);
   });
 
   it("send a shared value once, and not at all to a browser that holds it", async () => {
@@ -504,6 +542,16 @@ describe("islands", () => {
     );
     expect(markup).not.toContain("<f-island");
     expect(warn.mock.calls[0]![0]).toContain("functions are not serializable");
+  });
+
+  it("render without hydrating when a prop refers to itself, instead of overflowing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const node: { name: string; self?: unknown } = { name: "root" };
+    node.self = node;
+    const markup = await html(h(NodeIsland, { node }));
+    expect(markup).toContain("<output>root</output>");
+    expect(markup).not.toContain("<f-island");
+    expect(warn.mock.calls[0]![0]).toContain("circular values are not serializable");
   });
 });
 

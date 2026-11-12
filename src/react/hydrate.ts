@@ -24,6 +24,7 @@ import {
   SLOT_ELEMENT,
   SLOT_TAG,
   SLOT_TEMPLATE_ELEMENT,
+  SLOT_HOST_FIELD,
   SLOT_TREE_FIELD,
   TAG,
   TAG_BOUND,
@@ -31,7 +32,7 @@ import {
   getTag,
 } from "../protocol/wire";
 import { atIdPosition, parseIdPosition, type IdPosition } from "./ids";
-import { getContexts } from "./island";
+import { getContexts, mergeSlotHostProps } from "./island";
 import { createSlotTree, updateServerTrees } from "./tree";
 
 const ISLAND_SELECTOR = `${ISLAND_ELEMENT}[src]`;
@@ -160,6 +161,50 @@ function insideAnotherIsland(container: Element, scope: ParentNode): boolean {
   return false;
 }
 
+/** A slot's one host element, as the server sent it (see `SLOT_HOST_FIELD`). */
+interface SlotHostReference {
+  t: string;
+  p: Record<string, unknown>;
+}
+
+// Elements that take no children, so no inner HTML either.
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr",
+]);
+
+/**
+ * A slot whose server output is one host element. The element keeps its server HTML inside, and a
+ * client component that clones the slot (`asChild`) gives its props to the element itself.
+ */
+function HostSlot({
+  name,
+  host,
+  html,
+  ...given
+}: { name: string; host: SlotHostReference; html: string } & Record<string, unknown>) {
+  return React.createElement(
+    SLOT_ELEMENT,
+    { name, style: { display: "contents" }, suppressHydrationWarning: true },
+    React.createElement(host.t, {
+      ...mergeSlotHostProps(host.p, given),
+      suppressHydrationWarning: true,
+      ...(VOID_ELEMENTS.has(host.t) ? {} : { dangerouslySetInnerHTML: { __html: html } }),
+    }),
+  );
+}
+
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
 function revive(value: unknown, container: Element, values: ValueStore): unknown {
   if (value && typeof value === "object") {
@@ -200,6 +245,15 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
         { key: name, name, style: { display: "contents" } },
         tree,
       );
+    }
+    const host = object[SLOT_HOST_FIELD] as SlotHostReference | undefined;
+    if (host && typeof host.t === "string" && host.p && typeof host.p === "object") {
+      return React.createElement(HostSlot, {
+        key: name,
+        name,
+        host,
+        html: findSlot(container, name)?.firstElementChild?.innerHTML ?? "",
+      });
     }
     const html = findSlot(container, name)?.innerHTML ?? "";
     return React.createElement(SLOT_ELEMENT, {

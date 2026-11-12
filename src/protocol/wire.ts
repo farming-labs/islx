@@ -60,8 +60,14 @@ export const SLOT_TAG = "s";
  */
 export const SLOT_TREE_FIELD = "t";
 /**
- * \`{"$":"x","v":{"s":scope,"h":html}}\`: React elements an action returned. \`h\` is their server
- * HTML, holding the server tree (\`<script type="f/tree" name>\` named \`scope\`) the browser rebuilds
+ * On a slot reference: the slot's server output when it is one host element, as
+ * `{"t":tag,"p":props}`. A client component that clones the slot (`asChild`) gives its props to
+ * that element, as React Server Components do, instead of to the slot's wrapper.
+ */
+export const SLOT_HOST_FIELD = "h";
+/**
+ * `{"$":"x","v":{"s":scope,"h":html}}`: React elements an action returned. `h` is their server
+ * HTML, holding the server tree (`<script type="f/tree" name>` named `scope`) the browser rebuilds
  * them from, so their client components are live, as React Server Components return them.
  */
 export const ELEMENT_TAG = "x";
@@ -161,7 +167,12 @@ export function getTag(value: unknown): string | undefined {
   if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
     return tag;
   }
-  if (keys.length === 3 && tag === SLOT_TAG && TAG_VALUE in value && SLOT_TREE_FIELD in value) {
+  if (
+    keys.length === 3 &&
+    tag === SLOT_TAG &&
+    TAG_VALUE in value &&
+    (SLOT_TREE_FIELD in value || SLOT_HOST_FIELD in value)
+  ) {
     return tag;
   }
   return undefined;

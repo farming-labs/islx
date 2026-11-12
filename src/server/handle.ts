@@ -39,7 +39,7 @@ const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
 
 /** @internal Elements an action returned, rendered: their scope and server HTML (`ELEMENT_TAG`). */
 export class RenderedElements {
-  // A brand, not \`instanceof\`: the React adapter may load another copy of this module.
+  // A brand, not `instanceof`: the React adapter may load another copy of this module.
   readonly [RENDERED_ELEMENTS] = true;
   constructor(
     readonly scope: string,

@@ -20,6 +20,7 @@ import {
   PROMISE_SCRIPT_TYPE,
   PROPS_SCRIPT_TYPE,
   SLOT_ELEMENT,
+  SLOT_HOST_FIELD,
   SLOT_TAG,
   SLOT_TEMPLATE_ELEMENT,
   SLOT_TREE_FIELD,
@@ -215,14 +216,37 @@ function resolveSlots(
   return resolved;
 }
 
+/**
+ * @internal The props of a slot's host element after a client component cloned the slot with
+ * `given`: the clone's props win, and the classes and styles of both apply.
+ */
+export function mergeSlotHostProps(
+  own: Record<string, unknown>,
+  given: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...own, ...given };
+  const className = [given.className, own.className].filter(Boolean).join(" ");
+  if (className) merged.className = className;
+  if (own.style || given.style) {
+    merged.style = { ...(own.style as object), ...(given.style as object) };
+  }
+  return merged;
+}
+
 /** Server output in an island, where the island placed it. */
-function Slot({ name, slots }: { name: string; slots: IslandSlots }) {
+function Slot({
+  name,
+  slots,
+  ...given
+}: { name: string; slots: IslandSlots } & Record<string, unknown>) {
   slots.placed.add(name);
-  return React.createElement(
-    SLOT_ELEMENT,
-    { name, style: slotStyle },
-    slots.trees.get(name)?.element,
-  );
+  const tree = slots.trees.get(name);
+  // A clone (`asChild`) gives its props to the slot's element, as on the server of RSC.
+  const content =
+    tree?.host && Object.keys(given).length > 0
+      ? React.cloneElement(tree.host.element, mergeSlotHostProps(tree.host.props, given))
+      : tree?.element;
+  return React.createElement(SLOT_ELEMENT, { name, style: slotStyle }, content);
 }
 
 /**
@@ -234,6 +258,8 @@ function splitSlots(
   value: unknown,
   prefix: string,
   slots: IslandSlots,
+  // The objects above `value`: one that contains itself is left whole, and the encoder reports it.
+  ancestors: Set<object> = new Set(),
 ): { render: unknown; wire: unknown } {
   if (isElement(value)) {
     const name = `${prefix}${slots.next++}`;
@@ -246,20 +272,27 @@ function splitSlots(
       wire: reference,
     };
   }
+  if (value && typeof value === "object" && ancestors.has(value)) {
+    return { render: value, wire: value };
+  }
   if (Array.isArray(value)) {
-    const parts = value.map((entry) => splitSlots(entry, prefix, slots));
+    ancestors.add(value);
+    const parts = value.map((entry) => splitSlots(entry, prefix, slots, ancestors));
+    ancestors.delete(value);
     return { render: parts.map((part) => part.render), wire: parts.map((part) => part.wire) };
   }
   if (value && typeof value === "object") {
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
+    ancestors.add(value);
     const render: Record<string, unknown> = {};
     const wire: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      const part = splitSlots(entry, prefix, slots);
+      const part = splitSlots(entry, prefix, slots, ancestors);
       render[key] = part.render;
       wire[key] = part.wire;
     }
+    ancestors.delete(value);
     return { render, wire };
   }
   return { render: value, wire: value };
@@ -449,7 +482,9 @@ export function createIsland<P extends object>(
     if (slots.elements.size > 0) {
       slots.trees = React.use(resolveSlots(props, slots.elements, state?.held ?? null));
       for (const [name, reference] of slots.references) {
-        if (slots.trees.get(name)?.rebuild) reference[SLOT_TREE_FIELD] = 1;
+        const tree = slots.trees.get(name);
+        if (tree?.rebuild) reference[SLOT_TREE_FIELD] = 1;
+        else if (tree?.host) reference[SLOT_HOST_FIELD] = { t: tree.host.tag, p: tree.host.props };
       }
     }
     try {
