@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.0.10
+
+Islands keep the right state and every click, in three cases they did not.
+
+- An island keeps its state with its item when a list changes after an action or a refresh, as
+  React keys do. Islands whose props did not change keep their live root first; the rest pair up
+  in document order, as before. Before, removing the first item of a list moved its state onto the
+  next one.
+- A streamed island whose props script has not arrived yet waits for it while the page loads,
+  instead of failing, restoring its server HTML and failing again in a loop.
+- Every click made on an `interaction` island while its code loads is replayed, in order, so two
+  clicks on a counter count two. A repeated submit of a form, or click on its submit button, is
+  still held and replayed once.
+
 ## 0.0.9
 
 Islands behave as React Server Components do in four cases they did not.
