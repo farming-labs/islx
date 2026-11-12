@@ -59,6 +59,12 @@ export const SLOT_TAG = "s";
  * after the slot) that the browser rebuilds inside the island, instead of keeping its HTML.
  */
 export const SLOT_TREE_FIELD = "t";
+/**
+ * On a slot reference: the slot's server output when it is one host element, as
+ * `{"t":tag,"p":props}`. A client component that clones the slot (\`asChild\`) gives its props to
+ * that element, as React Server Components do, instead of to the slot's wrapper.
+ */
+export const SLOT_HOST_FIELD = "h";
 /** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
 export const ACTION_TAG = "a";
 /**
@@ -155,7 +161,12 @@ export function getTag(value: unknown): string | undefined {
   if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
     return tag;
   }
-  if (keys.length === 3 && tag === SLOT_TAG && TAG_VALUE in value && SLOT_TREE_FIELD in value) {
+  if (
+    keys.length === 3 &&
+    tag === SLOT_TAG &&
+    TAG_VALUE in value &&
+    (SLOT_TREE_FIELD in value || SLOT_HOST_FIELD in value)
+  ) {
     return tag;
   }
   return undefined;
