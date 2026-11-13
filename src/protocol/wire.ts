@@ -105,6 +105,13 @@ export const OBJECT_TAG = "o";
 export const FORM_DATA_TAG = "F";
 /** `{"$":"K","v":n}`: a `Blob` or `File` argument, sent as a field of a multipart call. */
 export const BLOB_TAG = "K";
+/**
+ * `{"$":"t","v":n}`: a value the browser sent to a server action that the codec cannot carry (an
+ * element, a function that is not an action, a class instance, a local symbol), by its index in
+ * the call. The action receives a stand-in it can only return; the browser then gets its own value
+ * back, as React Server Components send a temporary reference.
+ */
+export const TEMPORARY_TAG = "t";
 /** The multipart field of a call's JSON (`{"a":…,"b":…}`) when it carries form data or files. */
 export const CALL_FIELD = "$F_CALL";
 /** The multipart field name of attachment `n`, or of field `key` of `FormData` attachment `n`. */

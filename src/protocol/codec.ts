@@ -31,6 +31,7 @@ import {
   SLOT_TAG,
   TAG,
   TAG_VALUE,
+  TEMPORARY_TAG,
   getTag,
 } from "./wire";
 
@@ -199,6 +200,7 @@ export function decodeTagged(
     case ACTION_TAG:
     case FORM_DATA_TAG:
     case BLOB_TAG:
+    case TEMPORARY_TAG:
     case PROMISE_TAG:
     case STREAM_TAG:
     case CYCLE_TAG:
@@ -338,6 +340,12 @@ export interface EncodeOptions {
    * outermost first.
    */
   encodeObject?: (value: object, ancestors: () => readonly object[]) => unknown;
+  /**
+   * Encodes a value the codec cannot carry otherwise (an element, a function `encodeFunction`
+   * refused, a class instance `encodeObject` refused, a local symbol) as a temporary reference, or
+   * returns undefined to refuse it. A promise or a stream is never one.
+   */
+  encodeTemporary?: (value: unknown) => unknown;
   /** Names the root of the value in error messages. */
   path?: readonly (string | number)[];
   /**
@@ -361,6 +369,10 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
   const fail = (reason: string): never => {
     throw new EncodeError(reason, path);
   };
+  const temporary = (value: unknown, reason: string): unknown => {
+    const encoded = options.encodeTemporary?.(value);
+    return encoded === undefined ? fail(reason) : encoded;
+  };
   const visit = (value: unknown): unknown => {
     const leaf = encodeLeaf(value);
     if (leaf) return leaf;
@@ -368,9 +380,11 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
     if (typeof value === "number") return value;
     if (typeof value === "function") {
       const encoded = options.encodeFunction?.(value);
-      return encoded === undefined ? fail("functions are not serializable") : encoded;
+      return encoded === undefined ? temporary(value, "functions are not serializable") : encoded;
     }
-    if (typeof value !== "object") return fail(`${typeof value} values are not serializable`);
+    if (typeof value !== "object") {
+      return temporary(value, `${typeof value} values are not serializable`);
+    }
     const entries = readIterator(value);
     if (entries) {
       return tagged(
@@ -428,7 +442,7 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
         );
       }
       if (typeof (value as { $$typeof?: unknown }).$$typeof === "symbol") {
-        return fail("elements (JSX) are not serializable");
+        return temporary(value, "elements (JSX) are not serializable");
       }
       const prototype = Object.getPrototypeOf(value);
       // A plain object that is an async iterable is a stream, not its (symbol-keyed) fields.
@@ -438,7 +452,10 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
         );
         if (special !== undefined) return special;
         const name = (value as object).constructor?.name;
-        return fail(`class instances${name ? ` (${name})` : ""} are not serializable`);
+        const reason = `class instances${name ? ` (${name})` : ""} are not serializable`;
+        const pending =
+          getStreamKind(value) || typeof (value as { then?: unknown }).then === "function";
+        return pending ? fail(reason) : temporary(value, reason);
       }
       const encoded = plainObject(
         Object.entries(value).map(([key, entry]): [string, unknown] => {

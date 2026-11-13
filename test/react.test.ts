@@ -24,6 +24,7 @@ import {
   scheduleHydration,
 } from "@farm.js/islx/react/client";
 import { renderToStream } from "@farm.js/islx/react/server";
+import { createTemporaryReferences } from "../src/server/temporary";
 import { enhanceForms, getValueStore } from "@farm.js/islx/client";
 import {
   configureActionKeys,
@@ -631,6 +632,11 @@ describe("islands", () => {
     await expect(
       html(h(ShowsIsland, { at: new Date(0), tags: [], id: new Point() })),
     ).rejects.toThrow("Shows (/src/shows.tsx)");
+    // A value the browser sent to an action goes back as a value only, never into an island.
+    const sent = createTemporaryReferences().decode(0);
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: sent as never })),
+    ).rejects.toThrow(/Shows \(\/src\/shows\.tsx\).*not passed to a client component's props/);
   });
 
   it("render the elements a promise prop resolves to, and hydrate them, as React Server Components do", async () => {
