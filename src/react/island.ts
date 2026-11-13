@@ -445,6 +445,29 @@ function splitSlots(
     copies.delete(value);
     return copy;
   }
+  if (value instanceof Map || value instanceof Set) {
+    const copy =
+      value instanceof Map
+        ? { render: new Map<unknown, unknown>(), wire: new Map<unknown, unknown>() }
+        : { render: new Set<unknown>(), wire: new Set<unknown>() };
+    copies.set(value, copy);
+    if (value instanceof Map) {
+      for (const [key, entry] of value) {
+        const k = splitSlots(key, prefix, slots, copies);
+        const v = splitSlots(entry, prefix, slots, copies);
+        (copy.render as Map<unknown, unknown>).set(k.render, v.render);
+        (copy.wire as Map<unknown, unknown>).set(k.wire, v.wire);
+      }
+    } else {
+      for (const entry of value) {
+        const part = splitSlots(entry, prefix, slots, copies);
+        (copy.render as Set<unknown>).add(part.render);
+        (copy.wire as Set<unknown>).add(part.wire);
+      }
+    }
+    copies.delete(value);
+    return copy;
+  }
   // A stream travels as one, a plain object that is an async iterable too (symbol key and all).
   const kind = getStreamKind(value);
   if (kind) {
