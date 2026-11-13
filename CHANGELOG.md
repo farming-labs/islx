@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.20
+
+- An island whose props hold server output with client components inside keeps its state when the
+  page refreshes after an action. Before, it remounted ("the server tree of slot … was not
+  prepared").
+
 ## 0.0.19
 
 More of what React Server Components send travels, in props and action results.
