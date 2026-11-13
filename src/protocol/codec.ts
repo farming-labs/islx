@@ -265,11 +265,17 @@ export interface EncodeOptions {
   encodeFunction?: (value: Function) => unknown;
   /**
    * Encodes an object the codec cannot carry itself (`FormData`, a `Blob`), or returns
-   * undefined to refuse it.
+   * undefined to refuse it. `ancestors` lists the objects, arrays, maps and sets above it,
+   * outermost first.
    */
-  encodeObject?: (value: object) => unknown;
+  encodeObject?: (value: object, ancestors: () => readonly object[]) => unknown;
   /** Names the root of the value in error messages. */
   path?: readonly (string | number)[];
+  /**
+   * The objects, arrays, maps and sets above the value, outermost first, when it continues
+   * another value (a promise's settled value): a cycle reference inside can name them.
+   */
+  ancestors?: readonly object[];
 }
 
 /**
@@ -281,6 +287,7 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
   // The objects, arrays, maps and sets above the value, by depth: one met again inside itself
   // travels as the number of levels up to it, as React Server Components send it.
   const depths = new Map<object, number>();
+  for (const ancestor of options.ancestors ?? []) depths.set(ancestor, depths.size);
   const path: (string | number)[] = [...(options.path ?? [])];
   const fail = (reason: string): never => {
     throw new EncodeError(reason, path);
@@ -343,7 +350,9 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
       const prototype = Object.getPrototypeOf(value);
       // A plain object that is an async iterable is a stream, not its (symbol-keyed) fields.
       if ((prototype !== Object.prototype && prototype !== null) || getStreamKind(value)) {
-        const special = options.encodeObject?.(value as object);
+        const special = options.encodeObject?.(value as object, () =>
+          Array.from(depths.keys()).slice(0, -1),
+        );
         if (special !== undefined) return special;
         const name = (value as object).constructor?.name;
         return fail(`class instances${name ? ` (${name})` : ""} are not serializable`);
@@ -372,7 +381,12 @@ export interface DecodeOptions {
    * it. Without it, every reference throws: input from a browser must not name the runtime's own
    * references unless the caller checks them.
    */
-  decodeReference?: (object: Record<string, unknown>) => unknown;
+  decodeReference?: (
+    object: Record<string, unknown>,
+    ancestors: () => readonly unknown[],
+  ) => unknown;
+  /** The containers above the value when it continues another, as `EncodeOptions.ancestors`. */
+  ancestors?: readonly unknown[];
 }
 
 /**
@@ -390,7 +404,7 @@ export function resolveCycle(ancestors: readonly unknown[], levels: unknown): un
 /** Decodes what `encode` produced, after `JSON.parse`. Reference tags are rejected by default. */
 export function decode(value: unknown, options: DecodeOptions = {}): unknown {
   // Containers exist before their contents, so a cycle reference inside can name them.
-  const ancestors: unknown[] = [];
+  const ancestors: unknown[] = [...(options.ancestors ?? [])];
   const fill = <T>(into: T, add: (into: T) => void): T => {
     ancestors.push(into);
     try {
@@ -428,7 +442,7 @@ export function decode(value: unknown, options: DecodeOptions = {}): unknown {
       }
       const decoded = decodeTagged(object, visit);
       if (decoded !== NOT_A_VALUE) return decoded;
-      const reference = options.decodeReference?.(object);
+      const reference = options.decodeReference?.(object, () => ancestors.slice());
       if (reference !== undefined) return reference;
       throw new TypeError(`a ${JSON.stringify(object[TAG])} reference is not allowed here`);
     }

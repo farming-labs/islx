@@ -450,7 +450,15 @@ function readOutcome(
  * outcome is on the page, so hydration does not suspend, and settled when the outcome streams in
  * otherwise.
  */
+// Each promise an island received, by name: a name met again (a promise that settles to the
+// object holding it) is the same promise, placed before its value is revived.
+const islandPromises = new WeakMap<Element, Map<string, IslandThenable>>();
+
 function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
+  let named = islandPromises.get(container);
+  if (!named) islandPromises.set(container, (named = new Map()));
+  const known = named.get(name);
+  if (known) return known;
   const pending = pendingPromises.get(name);
   if (pending) return pending.thenable;
   let resolve!: (value: unknown) => void;
@@ -461,6 +469,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   });
   thenable.catch(() => {});
   thenable.status = "pending";
+  named.set(name, thenable);
   // Settled in place, so a `use` that reads it after this does not suspend.
   const settle = (outcome: Outcome) => {
     if (outcome.ok) {

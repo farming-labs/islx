@@ -620,6 +620,32 @@ describe("islands", () => {
     expect(errors()).toEqual([]);
   });
 
+  it("send a promise prop that settles to the object holding it once, instead of without end", async () => {
+    const errors = spyErrors();
+    type Holder = { name: string; self?: Promise<Holder> };
+    function Owner({ holder }: { holder: Holder }) {
+      const settled = use(holder.self!);
+      return h(
+        "p",
+        { "data-owner": "" },
+        `${settled.name} ${String(settled.self === holder.self)}`,
+      );
+    }
+    modules["/src/owner.tsx"] = { Owner };
+    const OwnerIsland = createIsland(Owner, "/src/owner.tsx", "Owner");
+    const holder: Holder = { name: "holder" };
+    holder.self = Promise.resolve(holder);
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(OwnerIsland, { holder })),
+    );
+    expect(markup.match(/type="f\/promise"/g)).toHaveLength(1);
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-owner]")!.textContent).toBe("holder true"),
+    );
+    expect(errors()).toEqual([]);
+  });
+
   it("give a stream prop's chunks to the server render too, elements included", async () => {
     const errors = spyErrors();
     const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
