@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.14
+
+Islands take what React Server Components send, and refuse what they refuse.
+
+- A client component can receive a `ReadableStream` or an async iterable. Its chunks stream in
+  after the page, as the server reads them, and an error reaches the browser without the
+  server's reason. Before, the island rendered without hydration.
+- A server action can return promises, `ReadableStream`s and async iterables. The call returns
+  first, and they settle as the server resolves them (`application/x-ndjson`). Before, the action
+  ran and then answered 500.
+- A client component given a plain function, a class instance or a symbol fails the render, with
+  an error that names the component and the prop, as under React Server Components. Before, it
+  rendered without hydration and logged a warning. A circular prop still renders without
+  hydration.
+
 ## 0.0.13
 
 - The browser keeps at most 1000 server action references, dropping the least recently used. Each
