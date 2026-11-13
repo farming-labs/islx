@@ -398,25 +398,51 @@ function findPromiseScript(container: Element, name: string): Element | null {
   return null;
 }
 
+type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
+
+/**
+ * Rebuilds the server trees of slots in a promise's value (installed by the hydration runtime,
+ * which has the module loader). They join the island's other prepared slots.
+ */
+let prepareValueSlots: ((container: Element, names: Set<string>) => Promise<void>) | null = null;
+
+/**
+ * Reads a promise's outcome and gives it to `done`: at once, or once the server trees of the slots
+ * in its value are rebuilt (their client modules load first).
+ */
 function readOutcome(
   script: Element,
   container: Element,
   values: ValueStore,
-): { ok: true; value: unknown } | { ok: false; reason: unknown } {
+  done: (outcome: Outcome) => void,
+): void {
+  let parsed: unknown;
   try {
     const text = script.textContent || "{}";
-    let parsed: unknown = JSON.parse(text);
+    parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || !("v" in parsed)) {
-      return { ok: false, reason: new Error("islx: the promise rejected on the server") };
+      return done({ ok: false, reason: new Error("islx: the promise rejected on the server") });
     }
     if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);
     }
-    return { ok: true, value: (revive(parsed, container, values) as { v: unknown }).v };
   } catch (reason) {
-    return { ok: false, reason };
+    return done({ ok: false, reason });
   }
+  const finish = () => {
+    try {
+      done({ ok: true, value: (revive(parsed, container, values) as { v: unknown }).v });
+    } catch (reason) {
+      done({ ok: false, reason });
+    }
+  };
+  const names = new Set<string>();
+  collectTreeSlots(parsed, names);
+  const prepared = preparedSlots.get(container);
+  for (const name of names) if (prepared?.has(name)) names.delete(name);
+  if (names.size === 0 || !prepareValueSlots) return finish();
+  prepareValueSlots(container, names).then(finish, (reason) => done({ ok: false, reason }));
 }
 
 /**
@@ -427,19 +453,6 @@ function readOutcome(
 function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
   const pending = pendingPromises.get(name);
   if (pending) return pending.thenable;
-  const script = findPromiseScript(container, name);
-  if (script) {
-    const outcome = readOutcome(script, container, values);
-    const thenable: IslandThenable = outcome.ok
-      ? Promise.resolve(outcome.value)
-      : Promise.reject(outcome.reason);
-    if (outcome.ok) Object.assign(thenable, { status: "fulfilled", value: outcome.value });
-    else {
-      thenable.catch(() => {});
-      Object.assign(thenable, { status: "rejected", reason: outcome.reason });
-    }
-    return thenable;
-  }
   let resolve!: (value: unknown) => void;
   let reject!: (reason: unknown) => void;
   const thenable: IslandThenable = new Promise((done, fail) => {
@@ -448,20 +461,28 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   });
   thenable.catch(() => {});
   thenable.status = "pending";
+  // Settled in place, so a `use` that reads it after this does not suspend.
+  const settle = (outcome: Outcome) => {
+    if (outcome.ok) {
+      Object.assign(thenable, { status: "fulfilled", value: outcome.value });
+      resolve(outcome.value);
+    } else {
+      Object.assign(thenable, { status: "rejected", reason: outcome.reason });
+      reject(outcome.reason);
+    }
+  };
+  const script = findPromiseScript(container, name);
+  if (script) {
+    readOutcome(script, container, values, settle);
+    return thenable;
+  }
   pendingPromises.set(name, {
     thenable,
     container,
     values,
     settle(found) {
       pendingPromises.delete(name);
-      const outcome = readOutcome(found, container, values);
-      if (outcome.ok) {
-        Object.assign(thenable, { status: "fulfilled", value: outcome.value });
-        resolve(outcome.value);
-      } else {
-        Object.assign(thenable, { status: "rejected", reason: outcome.reason });
-        reject(outcome.reason);
-      }
+      readOutcome(found, container, values, settle);
     },
   });
   if (!promiseObserver && typeof MutationObserver === "function") {
@@ -640,6 +661,20 @@ export function createHydrationRuntime(options: HydrationOptions) {
       })
     );
   });
+
+  prepareValueSlots = async (container, names) => {
+    const trees = preparedSlots.get(container) ?? new Map<string, React.ReactNode>();
+    await Promise.all(
+      Array.from(names, async (name) => {
+        const slot = findSlot(container, name);
+        const tree =
+          slot && (await createSlotTree(slot, name, { load: options.load, ServerHtml, values }));
+        if (!tree) throw new Error(`slot ${name} has no server tree`);
+        trees.set(name, tree);
+      }),
+    );
+    preparedSlots.set(container, trees);
+  };
 
   /** Rebuilds the server trees of an island's slots, loading their client modules. */
   async function prepareSlots(container: Element, id: string): Promise<void> {
