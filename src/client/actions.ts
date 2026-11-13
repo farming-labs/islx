@@ -232,18 +232,25 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     streamed?.payload ?? ((await response.json()) as { result?: unknown; redirect?: string });
   const navigator = state().navigator;
   if (typeof payload.redirect === "string") {
+    streamed?.start();
     reference.redirect = payload.redirect;
     if (navigator.navigate) await navigator.navigate(payload.redirect);
     else location.assign(payload.redirect);
     return undefined;
   }
-  const elements = await reviveElements(payload.result);
-  const result = decode(payload.result, {
-    decodeReference: (object) =>
-      elements.has(object)
-        ? elements.get(object)
-        : (streamed?.reference(object) ?? decodeActionReference(object)),
-  });
+  let result: unknown;
+  try {
+    const elements = await reviveElements(payload.result);
+    result = decode(payload.result, {
+      decodeReference: (object, ancestors) =>
+        elements.has(object)
+          ? elements.get(object)
+          : (streamed?.reference(object, ancestors) ?? decodeActionReference(object)),
+    });
+  } finally {
+    // Promises settle into what the result holds, so they start once it is decoded.
+    streamed?.start();
+  }
   // The caller's pending state (`useFormStatus`, `useActionState`) lasts until the page shows
   // what the action changed.
   if (navigator.refresh) await navigator.refresh();

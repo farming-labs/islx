@@ -148,4 +148,51 @@ describe("an action's arguments and result", () => {
     const settled = await later;
     expect(settled.self).toBe(settled);
   });
+
+  it("settle a promise to the object that holds it, as React Server Components do", async () => {
+    type Holder = {
+      name: string;
+      self?: Promise<Holder>;
+      items: Array<{ owner: Promise<Holder> }>;
+    };
+    const make = async () => {
+      const holder: Holder = { name: "holder", items: [] };
+      holder.self = Promise.resolve(holder);
+      holder.items.push({ owner: holder.self });
+      return holder;
+    };
+    registerServerReference(make, "cycle-promise");
+    serve();
+    const holder = (await createServerReference("cycle-promise")()) as Holder;
+    expect(await holder.self).toBe(holder);
+    // The same promise met twice is one promise in the browser.
+    expect(holder.items[0]!.owner).toBe(holder.self);
+  });
+
+  it("let a stream's chunks refer to what holds the stream, without keeping every chunk", async () => {
+    type Feed = { name: string; chunks?: ReadableStream<{ feed: Feed; index: number }> };
+    const make = async () => {
+      const feed: Feed = { name: "feed" };
+      let index = 0;
+      feed.chunks = new ReadableStream({
+        pull(controller) {
+          if (index === 3) return controller.close();
+          controller.enqueue({ feed, index: index++ });
+        },
+      });
+      return feed;
+    };
+    registerServerReference(make, "cycle-stream");
+    serve();
+    const feed = (await createServerReference("cycle-stream")()) as Feed;
+    const seen: number[] = [];
+    for await (const chunk of feed.chunks as unknown as AsyncIterable<{
+      feed: Feed;
+      index: number;
+    }>) {
+      expect(chunk.feed).toBe(feed);
+      seen.push(chunk.index);
+    }
+    expect(seen).toEqual([0, 1, 2]);
+  });
 });

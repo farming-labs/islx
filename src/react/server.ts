@@ -51,11 +51,13 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 setIslandServerHook({
-  encode(props, held) {
+  encode(props, held, named) {
     const promises: Array<{ name: string; promise: PromiseLike<unknown> }> = [];
     const addressed = addressValues(props, {
       encodeSpecial: (value) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        const known = value && typeof value === "object" ? named?.get(value) : undefined;
+        if (known) return known;
         const kind = getStreamKind(value);
         if (kind) {
           // Sent as the promise of its first step, which settles as the stream is read. A stream
@@ -63,12 +65,20 @@ setIslandServerHook({
           const name = nextPromiseName();
           const split = getWireSteps(value as object);
           promises.push({ name, promise: split?.first ?? toStreamSteps(value as object, kind) });
-          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: split?.kind ?? kind };
+          const tag = {
+            [TAG]: STREAM_TAG,
+            [TAG_VALUE]: name,
+            [STREAM_KIND_FIELD]: split?.kind ?? kind,
+          };
+          named?.set(value as object, tag);
+          return tag;
         }
         if (isThenable(value)) {
           const name = nextPromiseName();
           promises.push({ name, promise: value });
-          return { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
+          const tag = { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
+          named?.set(value as object, tag);
+          return tag;
         }
         if (typeof value === "function") {
           const reference = encodeActionReference(value);

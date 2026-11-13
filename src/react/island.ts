@@ -42,6 +42,12 @@ export interface IslandServerHook {
   encode(
     props: Record<string, unknown>,
     skip: ReadonlySet<string> | null,
+    /**
+     * The tags of the promises and streams named so far in this island, by value: one met again
+     * keeps its name. Without it, a promise that settles to the object holding it renders without
+     * end.
+     */
+    named?: Map<object, Record<string, unknown>>,
   ): {
     json: string;
     values: Array<{ key: string; json: string }>;
@@ -469,12 +475,13 @@ function promiseBoundaries(
   promises: ReturnType<IslandServerHook["encode"]>["promises"],
   label: string,
   island: string,
+  named: Map<object, Record<string, unknown>>,
 ): React.ReactNode[] {
   return promises.map(({ name, promise }) =>
     React.createElement(
       React.Suspense,
       { key: name, fallback: null },
-      React.createElement(IslandPromise, { name, promise, label, island }),
+      React.createElement(IslandPromise, { name, promise, label, island, named }),
     ),
   );
 }
@@ -488,12 +495,14 @@ function IslandPromise({
   promise,
   label,
   island,
+  named,
 }: {
   name: string;
   promise: PromiseLike<unknown>;
   label: string;
   /** The island's props id, which a `<template>` of the value's slots names. */
   island: string;
+  named: Map<object, Record<string, unknown>>;
 }) {
   const outcome = React.use(settle(promise));
   const slotsOf = promiseSlots.get(promise);
@@ -507,7 +516,7 @@ function IslandPromise({
   };
   if (outcome.ok) {
     try {
-      encoded = hook.encode({ v: outcome.value }, state?.held ?? null);
+      encoded = hook.encode({ v: outcome.value }, state?.held ?? null, named);
     } catch (error) {
       console.warn(
         `[islx] A promise passed to ${label} resolved to a value that cannot be sent to the browser: it rejects there.`,
@@ -550,7 +559,7 @@ function IslandPromise({
       name,
       dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
     }),
-    ...promiseBoundaries(encoded.promises, label, island),
+    ...promiseBoundaries(encoded.promises, label, island, named),
   );
 }
 
@@ -636,6 +645,7 @@ export function createIsland<P extends object>(
     }
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
+    const named = new Map<object, Record<string, unknown>>();
     let strategy = declared;
     const slots = createSlots(state?.held ?? null);
     const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
@@ -647,7 +657,7 @@ export function createIsland<P extends object>(
     try {
       if (options.inferred && slots.next > 0) strategy = "load";
       const skip = state ? new Set([...(state.held ?? []), ...state.sent]) : null;
-      encoded = hook.encode(wire as Record<string, unknown>, skip);
+      encoded = hook.encode(wire as Record<string, unknown>, skip, named);
       for (const value of encoded.values) state?.sent.add(value.key);
     } catch (error) {
       // An action's sealed values still sealing: React renders this part again once ready.
@@ -703,7 +713,7 @@ export function createIsland<P extends object>(
         slots,
         json: hook.escape(encoded.json),
       }),
-      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`, id),
+      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`, id, named),
     );
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;
