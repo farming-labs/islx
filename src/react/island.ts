@@ -11,6 +11,7 @@ import * as React from "react";
 // to link in an app that only loads this module.
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
+import { SERVER_ERROR_MESSAGE, readIterator, setIteratorEntries } from "../protocol/codec";
 import { getBuildDefaults } from "../server/build";
 import {
   fromStreamSteps,
@@ -72,6 +73,11 @@ export interface IslandServerHook {
     /** The promises in the props, by the name the JSON gives them. */
     promises: IslandPromiseEntry[];
   };
+  /**
+   * Reads what `encode` needs ready first (the bytes of blobs), or returns null when nothing is
+   * left to read. The same value gives the same promise, so a render can suspend on it.
+   */
+  prepare?(value: unknown): Promise<void> | null;
   /** A value's JSON, safe in a script element. */
   escape(json: string): string;
   /** JSON that already carries its tags (a server tree's payload), with large values addressed. */
@@ -488,6 +494,20 @@ function splitSlots(
     }
     return split;
   }
+  // The island renders the error the browser gets, not the server's own: its message stays here.
+  if (value instanceof Error) return { render: new Error(SERVER_ERROR_MESSAGE), wire: value };
+  // An iterator travels as its entries (read once): the island's server render reads its own
+  // iterator over them, and the browser gets another.
+  const entries = readIterator(value);
+  if (entries) {
+    const part = splitSlots(entries, prefix, slots, copies) as {
+      render: unknown[];
+      wire: unknown[];
+    };
+    const wire = part.wire.values();
+    setIteratorEntries(wire, part.wire);
+    return { render: part.render.values(), wire };
+  }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
   const copy = {
@@ -559,6 +579,8 @@ function IslandPromise({
   const slots = outcome.ok && slotsOf ? React.use(slotsOf) : null;
   const state = React.useContext(getContexts().render) ?? resolveRenderState();
   const hook = getIslandServerHook()!;
+  const reading = outcome.ok ? hook.prepare?.(outcome.value) : null;
+  if (reading) React.use(reading);
   let encoded: ReturnType<IslandServerHook["encode"]> = {
     json: REJECTED,
     values: [],
@@ -701,7 +723,10 @@ export function createIsland<P extends object>(
     let strategy = declared;
     const slots = createSlots(state?.held ?? null);
     const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
-    // Server output passed as props resolves first (outside the try: `use` suspends by throwing).
+    // Server output passed as props resolves first (outside the try: `use` suspends by throwing),
+    // and so do the bytes of blobs in them.
+    const reading = hook.prepare?.(props);
+    if (reading) React.use(reading);
     if (slots.elements.size > 0) {
       slots.trees = React.use(resolveSlots(props, slots.elements, slots.held));
       markSlotReferences(slots);

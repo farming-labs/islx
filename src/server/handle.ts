@@ -31,6 +31,7 @@ import { decodeActionReference, resolveAction, type ResolvedAction } from "./act
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { createResultEncoder } from "./result-stream";
+import { prepareBlobs } from "./blobs";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
 
 const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
@@ -266,6 +267,7 @@ export async function handleAction(
         : undefined,
     );
     try {
+      await prepareBlobs(ran.result);
       const result = results.encode(ran.result);
       if (!results.streams) return json({ result });
       const report =

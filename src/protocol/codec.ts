@@ -83,6 +83,11 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
   switch (typeof value) {
     case "undefined":
       return tagged("u");
+    case "symbol": {
+      // Only a global symbol is the same symbol in the browser, as React Server Components send it.
+      const key = Symbol.keyFor(value);
+      return key === undefined ? undefined : tagged("y", key);
+    }
     case "bigint":
       return tagged("B", value.toString());
     case "number":
@@ -102,6 +107,8 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
   }
   if (typeof URL === "function" && value instanceof URL) return tagged("U", value.href);
   if (value instanceof RegExp) return tagged("R", [value.source, value.flags]);
+  // Its message and stack stay on the server, as React Server Components send one in production.
+  if (value instanceof Error) return tagged("Z");
   if (value instanceof ArrayBuffer) {
     return tagged("Y", ["ArrayBuffer", toBase64(new Uint8Array(value))]);
   }
@@ -112,6 +119,39 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
     return tagged("Y", [name, toBase64(bytes)]);
   }
   return undefined;
+}
+
+/** The message of an error a server sent: its own stays there. */
+export const SERVER_ERROR_MESSAGE =
+  "An error occurred on the server. Its message is omitted so it does not leak server details.";
+
+// The entries of each iterator read so far: reading consumes it, and a value may be encoded twice.
+const iteratorEntries = new WeakMap<object, unknown[]>();
+
+/**
+ * The entries of an iterator that is its own iterable (a generator, `set.values()`), which travels
+ * as its entries and arrives as an iterator over them, as React Server Components send it; or
+ * undefined for any other value.
+ */
+export function readIterator(value: unknown): unknown[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const known = iteratorEntries.get(value);
+  if (known) return known;
+  const iterate = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
+  if (typeof iterate !== "function" || value instanceof Map || value instanceof Set)
+    return undefined;
+  if (ArrayBuffer.isView(value) || typeof (value as { next?: unknown }).next !== "function") {
+    return undefined;
+  }
+  if (iterate.call(value) !== value) return undefined;
+  const entries = Array.from(value as Iterable<unknown>);
+  iteratorEntries.set(value, entries);
+  return entries;
+}
+
+/** Registers `entries` as what `iterator` holds, for an iterator made from entries already read. */
+export function setIteratorEntries(iterator: object, entries: unknown[]): void {
+  iteratorEntries.set(iterator, entries);
 }
 
 /** Returned by `decodeTagged` for the runtime's reference tags (`r`, `s`, `a`). */
@@ -219,6 +259,35 @@ export function decodeTagged(
     case "S":
       if (Array.isArray(data)) return new Set(data.map(decodeChild));
       break;
+    case "y":
+      if (typeof data === "string") return Symbol.for(data);
+      break;
+    case "Z":
+      return new Error(SERVER_ERROR_MESSAGE);
+    case "i":
+      if (Array.isArray(data)) return data.map(decodeChild)[Symbol.iterator]();
+      break;
+    case "b":
+      if (Array.isArray(data) && typeof data[0] === "string" && typeof data[1] === "string") {
+        return new Blob([fromBase64(data[1]) as Uint8Array<ArrayBuffer>], { type: data[0] });
+      }
+      break;
+    case "f":
+      if (
+        Array.isArray(data) &&
+        data.every((entry) => Array.isArray(entry) && entry.length === 2)
+      ) {
+        const form = new FormData();
+        for (const [name, entry] of data as [unknown, unknown][]) {
+          const value = decodeChild(entry);
+          if (typeof name !== "string" || !(typeof value === "string" || value instanceof Blob)) {
+            break;
+          }
+          form.append(name, value);
+        }
+        return form;
+      }
+      break;
     default:
       throw new TypeError(`unknown ${JSON.stringify(tag)} tag`);
   }
@@ -302,6 +371,20 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
       return encoded === undefined ? fail("functions are not serializable") : encoded;
     }
     if (typeof value !== "object") return fail(`${typeof value} values are not serializable`);
+    const entries = readIterator(value);
+    if (entries) {
+      return tagged(
+        "i",
+        entries.map((entry, index) => {
+          path.push(index);
+          try {
+            return visit(entry);
+          } finally {
+            path.pop();
+          }
+        }),
+      );
+    }
     const depth = depths.get(value);
     if (depth !== undefined) return tagged(CYCLE_TAG, depths.size - depth);
     depths.set(value, depths.size);

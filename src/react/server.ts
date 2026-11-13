@@ -5,7 +5,7 @@
 import * as React from "react";
 import { fromStreamSteps, getStreamKind, toStreamSteps, type StreamStep } from "../protocol/stream";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
-import { encode } from "../protocol/codec";
+import { encode, readIterator, setIteratorEntries } from "../protocol/codec";
 import {
   FORM_STATE_SCRIPT_TYPE,
   PROMISE_TAG,
@@ -18,6 +18,7 @@ import {
 import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
+import { encodeSentObject, prepareBlobs } from "../server/blobs";
 import { getBuildDefaults } from "../server/build";
 import { RenderedElements, setActionResultRenderer, type ReactFormState } from "../server/handle";
 import {
@@ -64,6 +65,8 @@ setIslandServerHook({
       ancestors,
       encodeSpecial: (value, above) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        const sent = encodeSentObject(value);
+        if (sent) return sent;
         const known = value && typeof value === "object" ? named?.get(value) : undefined;
         if (known) return known;
         const kind = getStreamKind(value);
@@ -116,6 +119,7 @@ setIslandServerHook({
       promises,
     };
   },
+  prepare: prepareBlobs,
   escape: escapeScriptJson,
   address(payload, skip) {
     const addressed = addressValues(payload, { encoded: true });
@@ -283,6 +287,18 @@ function renderInResult(value: unknown, render: ResultRender, pending: Promise<v
       place(renderInResult(entry, render, pending), (rendered) => (copy[index] = rendered));
     });
     return copy;
+  }
+  // An iterator travels as its entries (read once), rendered like an array's.
+  const entries = readIterator(value);
+  if (entries) {
+    const copy: unknown[] = Array.from({ length: entries.length });
+    const iterator = copy.values();
+    setIteratorEntries(iterator, copy);
+    render.copies.set(value, iterator);
+    entries.forEach((entry, index) => {
+      place(renderInResult(entry, render, pending), (rendered) => (copy[index] = rendered));
+    });
+    return iterator;
   }
   // A map's or set's entries render in order, keys too, once each is ready.
   if (value instanceof Map || value instanceof Set) {
