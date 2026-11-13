@@ -561,6 +561,38 @@ describe("islands", () => {
     ).rejects.toThrow("Shows (/src/shows.tsx)");
   });
 
+  it("render the elements a promise prop resolves to, and hydrate them, as React Server Components do", async () => {
+    const errors = spyErrors();
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    function Later({ content }: { content: Promise<ReactNode> }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h("button", { "data-later": "", onClick: () => setClicks(clicks + 1) }, `later ${clicks}`),
+        h("section", { "data-content": "" }, use(content)),
+      );
+    }
+    modules["/src/later.tsx"] = { Later };
+    const LaterIsland = createIsland(Later, "/src/later.tsx", "Later");
+    const content = tick().then(() =>
+      h("strong", null, "arrived ", h(CounterIsland, { start: 4, label: "inner" })),
+    );
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(LaterIsland, { content })),
+    );
+    expect(markup).toContain("arrived");
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-later]")!.click());
+    expect(document.querySelector("[data-later]")!.textContent).toBe("later 1");
+    expect(document.querySelector("[data-content] strong")!.textContent).toBe("arrived inner 4");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="inner"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="inner"]')!.textContent).toBe("inner 5");
+    expect(errors()).toEqual([]);
+  });
+
   it("send props that refer to themselves, as React Server Components do", async () => {
     type Node = { name: string; self?: Node; children: Array<{ parent: Node }>; big: string };
     const node: Node = { name: "root", children: [], big: "x".repeat(600) };
