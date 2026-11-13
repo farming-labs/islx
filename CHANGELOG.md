@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.21
+
+Server actions take and return what React Server Components let them.
+
+- A value the codec cannot carry (an element, a plain function, a class instance, a local symbol)
+  can be an action argument. The action gets a stand-in it can only return, and the browser gets
+  the same object back, as a temporary reference. Reading or changing the stand-in throws.
+- An action bound with `.bind` in the browser can be sent to another action, and an action the
+  browser sent can be bound again on the server and returned.
+- An action can return an inline action that captured values. Before, the call answered 500.
+
 ## 0.0.20
 
 - An island whose props hold server output with client components inside keeps its state when the
