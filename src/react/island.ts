@@ -11,6 +11,7 @@ import * as React from "react";
 // to link in an app that only loads this module.
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
+import { SERVER_ERROR_MESSAGE, readIterator, setIteratorEntries } from "../protocol/codec";
 import { getBuildDefaults } from "../server/build";
 import {
   fromStreamSteps,
@@ -36,18 +37,47 @@ import {
   VALUE_SCRIPT_TYPE,
 } from "../protocol/wire";
 
+/** What one island's encodes share, from its props to the values its promises settle to. */
+export interface IslandEncodeContext {
+  /**
+   * The tags of the promises and streams named so far, by value: one met again keeps its name, so
+   * a promise that settles to the object holding it is sent once.
+   */
+  named: Map<object, Record<string, unknown>>;
+  /** A stream step's next step, by promise: it continues the stream's ancestors, not the step's. */
+  nextSteps: WeakMap<object, readonly object[]>;
+}
+
+/** A promise in an island's props, and where its settled value continues. */
+export interface IslandPromiseEntry {
+  name: string;
+  promise: PromiseLike<unknown>;
+  /** The objects, arrays, maps and sets above the promise, outermost first. */
+  ancestors?: readonly object[];
+  /** Whether it is a stream's step. */
+  step?: boolean;
+}
+
 /** What `@farm.js/islx/react/server` installs: encoding props needs server code. */
 export interface IslandServerHook {
   /** Props as JSON with large values addressed, and the value scripts to send first. */
   encode(
     props: Record<string, unknown>,
     skip: ReadonlySet<string> | null,
+    context?: IslandEncodeContext,
+    /** The containers above the props, when they are a promise's settled value. */
+    ancestors?: readonly object[],
   ): {
     json: string;
     values: Array<{ key: string; json: string }>;
     /** The promises in the props, by the name the JSON gives them. */
-    promises: Array<{ name: string; promise: PromiseLike<unknown> }>;
+    promises: IslandPromiseEntry[];
   };
+  /**
+   * Reads what `encode` needs ready first (the bytes of blobs), or returns null when nothing is
+   * left to read. The same value gives the same promise, so a render can suspend on it.
+   */
+  prepare?(value: unknown): Promise<void> | null;
   /** A value's JSON, safe in a script element. */
   escape(json: string): string;
   /** JSON that already carries its tags (a server tree's payload), with large values addressed. */
@@ -256,10 +286,13 @@ function splitSteps(
   prefix: string,
   held: ReadonlySet<string> | null,
   count: { next: number },
+  // The copies of the objects above the stream, which each chunk continues.
+  above: ReadonlyMap<object, { render: unknown; wire: unknown }>,
 ): { render: Promise<StreamStep>; wire: Promise<StreamStep> } {
   const parts = Promise.resolve(steps).then(async (step) => {
     const inner = createSlots(held);
-    const split = (value: unknown) => splitSlots(value, `${prefix}${count.next++}_`, inner);
+    const split = (value: unknown) =>
+      splitSlots(value, `${prefix}${count.next++}_`, inner, new Map(above));
     let render: StreamStep;
     let wire: StreamStep;
     if ("d" in step) {
@@ -268,7 +301,7 @@ function splitSteps(
       wire = part ? { d: 1, v: part.wire } : step;
     } else {
       const part = split(step.v);
-      const next = splitSteps(step.n, prefix, held, count);
+      const next = splitSteps(step.n, prefix, held, count, above);
       render = { v: part.render, n: next.render };
       wire = { v: part.wire, n: next.wire };
     }
@@ -382,9 +415,11 @@ function splitSlots(
     let split = splitPromises.get(value);
     if (!split) {
       const held = slots.held;
+      // The settled value continues where the promise is: an object above it is the same copy.
+      const above = new Map(copies);
       const parts = Promise.resolve(value).then(async (resolved) => {
         const inner = createSlots(held);
-        const part = splitSlots(resolved, prefixed, inner);
+        const part = splitSlots(resolved, prefixed, inner, above);
         if (inner.elements.size > 0) {
           inner.trees = await renderSlots(inner.elements, held);
           markSlotReferences(inner);
@@ -416,19 +451,62 @@ function splitSlots(
     copies.delete(value);
     return copy;
   }
+  if (value instanceof Map || value instanceof Set) {
+    const copy =
+      value instanceof Map
+        ? { render: new Map<unknown, unknown>(), wire: new Map<unknown, unknown>() }
+        : { render: new Set<unknown>(), wire: new Set<unknown>() };
+    copies.set(value, copy);
+    if (value instanceof Map) {
+      for (const [key, entry] of value) {
+        const k = splitSlots(key, prefix, slots, copies);
+        const v = splitSlots(entry, prefix, slots, copies);
+        (copy.render as Map<unknown, unknown>).set(k.render, v.render);
+        (copy.wire as Map<unknown, unknown>).set(k.wire, v.wire);
+      }
+    } else {
+      for (const entry of value) {
+        const part = splitSlots(entry, prefix, slots, copies);
+        (copy.render as Set<unknown>).add(part.render);
+        (copy.wire as Set<unknown>).add(part.wire);
+      }
+    }
+    copies.delete(value);
+    return copy;
+  }
   // A stream travels as one, a plain object that is an async iterable too (symbol key and all).
   const kind = getStreamKind(value);
   if (kind) {
     const prefixed = `${prefix}w${slots.promises++}_`;
     let split = splitStreams.get(value);
     if (!split) {
-      const steps = splitSteps(toStreamSteps(value, kind), prefixed, slots.held, { next: 0 });
+      const steps = splitSteps(
+        toStreamSteps(value, kind),
+        prefixed,
+        slots.held,
+        { next: 0 },
+        new Map(copies),
+      );
       const wire = fromStreamSteps(steps.wire, kind) as object;
       wireSteps.set(wire, { first: steps.wire, kind });
       split = { render: fromStreamSteps(steps.render, kind), wire };
       splitStreams.set(value, split);
     }
     return split;
+  }
+  // The island renders the error the browser gets, not the server's own: its message stays here.
+  if (value instanceof Error) return { render: new Error(SERVER_ERROR_MESSAGE), wire: value };
+  // An iterator travels as its entries (read once): the island's server render reads its own
+  // iterator over them, and the browser gets another.
+  const entries = readIterator(value);
+  if (entries) {
+    const part = splitSlots(entries, prefix, slots, copies) as {
+      render: unknown[];
+      wire: unknown[];
+    };
+    const wire = part.wire.values();
+    setIteratorEntries(wire, part.wire);
+    return { render: part.render.values(), wire };
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
@@ -466,15 +544,16 @@ const REJECTED = '{"e":1}';
 
 /** Each promise an island received, in a boundary of its own: its outcome once it settles. */
 function promiseBoundaries(
-  promises: ReturnType<IslandServerHook["encode"]>["promises"],
+  promises: IslandPromiseEntry[],
   label: string,
   island: string,
+  context: IslandEncodeContext,
 ): React.ReactNode[] {
-  return promises.map(({ name, promise }) =>
+  return promises.map((entry) =>
     React.createElement(
       React.Suspense,
-      { key: name, fallback: null },
-      React.createElement(IslandPromise, { name, promise, label, island }),
+      { key: entry.name, fallback: null },
+      React.createElement(IslandPromise, { entry, label, island, context }),
     ),
   );
 }
@@ -484,22 +563,24 @@ function promiseBoundaries(
  * them already: this script may land before an earlier island's, wherever React puts it.
  */
 function IslandPromise({
-  name,
-  promise,
+  entry: { name, promise, ancestors, step },
   label,
   island,
+  context,
 }: {
-  name: string;
-  promise: PromiseLike<unknown>;
+  entry: IslandPromiseEntry;
   label: string;
   /** The island's props id, which a `<template>` of the value's slots names. */
   island: string;
+  context: IslandEncodeContext;
 }) {
   const outcome = React.use(settle(promise));
   const slotsOf = promiseSlots.get(promise);
   const slots = outcome.ok && slotsOf ? React.use(slotsOf) : null;
   const state = React.useContext(getContexts().render) ?? resolveRenderState();
   const hook = getIslandServerHook()!;
+  const reading = outcome.ok ? hook.prepare?.(outcome.value) : null;
+  if (reading) React.use(reading);
   let encoded: ReturnType<IslandServerHook["encode"]> = {
     json: REJECTED,
     values: [],
@@ -507,7 +588,9 @@ function IslandPromise({
   };
   if (outcome.ok) {
     try {
-      encoded = hook.encode({ v: outcome.value }, state?.held ?? null);
+      const next = step ? (outcome.value as { n?: unknown } | null)?.n : undefined;
+      if (next && typeof next === "object") context.nextSteps.set(next, ancestors ?? []);
+      encoded = hook.encode({ v: outcome.value }, state?.held ?? null, context, ancestors);
     } catch (error) {
       console.warn(
         `[islx] A promise passed to ${label} resolved to a value that cannot be sent to the browser: it rejects there.`,
@@ -550,7 +633,7 @@ function IslandPromise({
       name,
       dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
     }),
-    ...promiseBoundaries(encoded.promises, label, island),
+    ...promiseBoundaries(encoded.promises, label, island, context),
   );
 }
 
@@ -636,10 +719,14 @@ export function createIsland<P extends object>(
     }
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
+    const context: IslandEncodeContext = { named: new Map(), nextSteps: new WeakMap() };
     let strategy = declared;
     const slots = createSlots(state?.held ?? null);
     const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
-    // Server output passed as props resolves first (outside the try: `use` suspends by throwing).
+    // Server output passed as props resolves first (outside the try: `use` suspends by throwing),
+    // and so do the bytes of blobs in them.
+    const reading = hook.prepare?.(props);
+    if (reading) React.use(reading);
     if (slots.elements.size > 0) {
       slots.trees = React.use(resolveSlots(props, slots.elements, slots.held));
       markSlotReferences(slots);
@@ -647,7 +734,7 @@ export function createIsland<P extends object>(
     try {
       if (options.inferred && slots.next > 0) strategy = "load";
       const skip = state ? new Set([...(state.held ?? []), ...state.sent]) : null;
-      encoded = hook.encode(wire as Record<string, unknown>, skip);
+      encoded = hook.encode(wire as Record<string, unknown>, skip, context);
       for (const value of encoded.values) state?.sent.add(value.key);
     } catch (error) {
       // An action's sealed values still sealing: React renders this part again once ready.
@@ -703,7 +790,7 @@ export function createIsland<P extends object>(
         slots,
         json: hook.escape(encoded.json),
       }),
-      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`, id),
+      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`, id, context),
     );
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;

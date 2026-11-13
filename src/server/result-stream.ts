@@ -6,11 +6,16 @@
 import { encode } from "../protocol/codec";
 import { getStreamKind, toStreamSteps } from "../protocol/stream";
 import { PROMISE_TAG, STREAM_KIND_FIELD, STREAM_TAG, TAG, TAG_VALUE } from "../protocol/wire";
-import { encodeActionReference } from "./actions";
+import { encodeActionReference, prepareSeals } from "./actions";
+import { encodeSentObject, prepareBlobs } from "./blobs";
 
 interface Pending {
   name: string;
   promise: PromiseLike<unknown>;
+  /** The containers above the promise, which its settled value continues. */
+  ancestors: readonly object[];
+  /** Whether it is a stream's step, whose next step continues the stream's ancestors. */
+  step: boolean;
 }
 
 function isThenable(value: object): value is PromiseLike<unknown> {
@@ -22,28 +27,41 @@ export function createResultEncoder(encodeObject: (value: object) => unknown) {
   let count = 0;
   const queued: Pending[] = [];
   let watch: ((pending: Pending) => void) | null = null;
-  const add = (promise: PromiseLike<unknown>): string => {
-    const pending = { name: (count++).toString(36), promise };
+  // A promise or stream met again keeps its name, as React Server Components send it once: a
+  // promise that settles to the object holding it would otherwise send itself without end.
+  const named = new WeakMap<object, unknown>();
+  // A step's next step, which continues the stream's ancestors rather than the step's, so a long
+  // stream does not keep every chunk.
+  const nextSteps = new WeakMap<object, readonly object[]>();
+  const add = (promise: PromiseLike<unknown>, ancestors: readonly object[], step: boolean) => {
+    const pending = { name: (count++).toString(36), promise, ancestors, step };
     if (watch) watch(pending);
     else queued.push(pending);
     return pending.name;
   };
-  const encodeValue = (value: unknown): unknown =>
+  const encodeValue = (value: unknown, ancestors?: readonly object[]): unknown =>
     encode(value, {
+      ancestors,
       encodeFunction: encodeActionReference,
-      encodeObject: (object) => {
-        const special = encodeObject(object);
+      encodeObject: (object, above) => {
+        const special = encodeObject(object) ?? encodeSentObject(object);
         if (special !== undefined) return special;
+        const known = named.get(object);
+        if (known !== undefined) return known;
+        let encoded: unknown;
         const kind = getStreamKind(object);
         if (kind) {
-          return {
+          encoded = {
             [TAG]: STREAM_TAG,
-            [TAG_VALUE]: add(toStreamSteps(object, kind)),
+            [TAG_VALUE]: add(toStreamSteps(object, kind), above(), true),
             [STREAM_KIND_FIELD]: kind,
           };
+        } else if (isThenable(object)) {
+          const next = nextSteps.get(object);
+          encoded = { [TAG]: PROMISE_TAG, [TAG_VALUE]: add(object, next ?? above(), !!next) };
         }
-        if (isThenable(object)) return { [TAG]: PROMISE_TAG, [TAG_VALUE]: add(object) };
-        return undefined;
+        if (encoded !== undefined) named.set(object, encoded);
+        return encoded;
       },
     });
   return {
@@ -68,14 +86,21 @@ export function createResultEncoder(encodeObject: (value: object) => unknown) {
               controller.close();
             }
           };
-          watch = ({ name, promise }) => {
+          watch = ({ name, promise, ancestors, step }) => {
             open++;
             Promise.resolve(promise)
+              .then(async (value) => {
+                await prepareBlobs(value);
+                await prepareSeals(value);
+                return value;
+              })
               .then(
                 (value) => {
+                  const next = step ? (value as { n?: unknown } | null)?.n : undefined;
+                  if (next && typeof next === "object") nextSteps.set(next, ancestors);
                   let line: unknown;
                   try {
-                    line = { p: name, v: encodeValue({ v: value }) };
+                    line = { p: name, v: encodeValue({ v: value }, ancestors) };
                   } catch (error) {
                     onError(error);
                     line = { p: name, e: 1 };

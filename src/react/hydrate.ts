@@ -69,6 +69,8 @@ interface RootRecord {
   /** The props as the server sent them, to find the same island in a later render. */
   wire: string;
   serverHTML: string;
+  /** The latest carry-over still waiting for server trees: an older one does not render. */
+  carry?: symbol;
   restore(error: unknown): void;
   dispose(): void;
 }
@@ -121,7 +123,12 @@ let slotsRevived = 0;
  * A slot's server HTML: inside the island where it placed the slot, or in the template after its
  * props for a slot it had not placed.
  */
+// The slots of an island carried over a refresh, found before it left the page it came in.
+const capturedSlots = new WeakMap<Element, Map<string, Element | null>>();
+
 function findSlot(container: Element, name: string): Element | null {
+  const captured = capturedSlots.get(container);
+  if (captured?.has(name)) return captured.get(name)!;
   for (const slot of container.querySelectorAll(SLOT_ELEMENT)) {
     if (slot.getAttribute("name") === name) return slot;
   }
@@ -139,6 +146,20 @@ function findSlot(container: Element, name: string): Element | null {
 
 /** Each island's slots that carry server trees, rebuilt before the island hydrates. */
 const preparedSlots = new WeakMap<Element, Map<string, React.ReactNode>>();
+
+/** The names of every slot in `value`. */
+function collectSlots(value: unknown, names: Set<string>, seen = new Set<object>()): void {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  const object = value as Record<string, unknown>;
+  if (object[TAG] === SLOT_TAG && typeof object[TAG_VALUE] === "string") {
+    names.add(object[TAG_VALUE]);
+    return;
+  }
+  for (const entry of Array.isArray(value) ? value : Object.values(object)) {
+    collectSlots(entry, names, seen);
+  }
+}
 
 /** The names of the slots in `value` that carry server trees. */
 function collectTreeSlots(value: unknown, names: Set<string>, seen = new Set<object>()): void {
@@ -312,13 +333,20 @@ function reviveUncached(
     });
   }
   if (tag === PROMISE_TAG && typeof object[TAG_VALUE] === "string") {
-    return islandPromise(object[TAG_VALUE], container, values);
+    const inherited = nextSteps.get(object);
+    return islandPromise(object[TAG_VALUE], container, values, {
+      ancestors: inherited ?? scope.ancestors.slice(),
+      step: !!inherited,
+    });
   }
   if (tag === STREAM_TAG && typeof object[TAG_VALUE] === "string") {
     const kind = object[STREAM_KIND_FIELD];
     if (kind !== "r" && kind !== "i" && kind !== "t") throw new TypeError("malformed islx stream");
     return fromStreamSteps(
-      islandPromise(object[TAG_VALUE], container, values) as PromiseLike<StreamStep>,
+      islandPromise(object[TAG_VALUE], container, values, {
+        ancestors: scope.ancestors.slice(),
+        step: true,
+      }) as PromiseLike<StreamStep>,
       kind,
     );
   }
@@ -400,6 +428,18 @@ function findPromiseScript(container: Element, name: string): Element | null {
 
 type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
 
+/** Where a promise's settled value continues: the containers above the promise, revived. */
+interface Placement {
+  ancestors: readonly unknown[];
+  /** Whether it is a stream's step, whose next step continues the stream's ancestors. */
+  step: boolean;
+}
+
+const UNPLACED: Placement = { ancestors: [], step: false };
+
+/** The tags that name a stream step's next step, by tag object, with the stream's ancestors. */
+const nextSteps = new WeakMap<object, readonly unknown[]>();
+
 /**
  * Rebuilds the server trees of slots in a promise's value (installed by the hydration runtime,
  * which has the module loader). They join the island's other prepared slots.
@@ -414,6 +454,7 @@ function readOutcome(
   script: Element,
   container: Element,
   values: ValueStore,
+  place: Placement,
   done: (outcome: Outcome) => void,
 ): void {
   let parsed: unknown;
@@ -432,7 +473,13 @@ function readOutcome(
   }
   const finish = () => {
     try {
-      done({ ok: true, value: (revive(parsed, container, values) as { v: unknown }).v });
+      // The value continues where the promise is, so a cycle reference inside counts up through
+      // the containers above it (the server does not count the `{"v":…}` wrapper).
+      const value = (parsed as { v: unknown }).v;
+      const next = place.step ? (value as { n?: unknown } | null)?.n : undefined;
+      if (next && typeof next === "object") nextSteps.set(next, place.ancestors);
+      const scope = { ancestors: [...place.ancestors], lowest: Infinity };
+      done({ ok: true, value: revive(value, container, values, scope) });
     } catch (reason) {
       done({ ok: false, reason });
     }
@@ -450,7 +497,20 @@ function readOutcome(
  * outcome is on the page, so hydration does not suspend, and settled when the outcome streams in
  * otherwise.
  */
-function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
+// Each promise an island received, by name: a name met again (a promise that settles to the
+// object holding it) is the same promise, placed before its value is revived.
+const islandPromises = new WeakMap<Element, Map<string, IslandThenable>>();
+
+function islandPromise(
+  name: string,
+  container: Element,
+  values: ValueStore,
+  place: Placement = UNPLACED,
+): IslandThenable {
+  let named = islandPromises.get(container);
+  if (!named) islandPromises.set(container, (named = new Map()));
+  const known = named.get(name);
+  if (known) return known;
   const pending = pendingPromises.get(name);
   if (pending) return pending.thenable;
   let resolve!: (value: unknown) => void;
@@ -461,6 +521,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   });
   thenable.catch(() => {});
   thenable.status = "pending";
+  named.set(name, thenable);
   // Settled in place, so a `use` that reads it after this does not suspend.
   const settle = (outcome: Outcome) => {
     if (outcome.ok) {
@@ -473,7 +534,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   };
   const script = findPromiseScript(container, name);
   if (script) {
-    readOutcome(script, container, values, settle);
+    readOutcome(script, container, values, place, settle);
     return thenable;
   }
   pendingPromises.set(name, {
@@ -482,7 +543,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
     values,
     settle(found) {
       pendingPromises.delete(name);
-      readOutcome(found, container, values, settle);
+      readOutcome(found, container, values, place, settle);
     },
   });
   if (!promiseObserver && typeof MutationObserver === "function") {
@@ -700,8 +761,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
     preparedSlots.set(container, trees);
   }
 
-  /** An island's props, with values, slots and actions revived. */
-  function readProps(container: Element, id: string): Record<string, unknown> {
+  /** An island's props as sent, with values resolved; `tagged` when anything needs reviving. */
+  function parseProps(container: Element, id: string): { parsed: unknown; tagged: boolean } {
     const script = findPropsScript(container, id);
     if (!script) throw new Error(`props ${id} were not found`);
     const text = script.textContent || "{}";
@@ -709,12 +770,18 @@ export function createHydrationRuntime(options: HydrationOptions) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("props must be an object");
     // No tag anywhere: plain JSON, nothing to resolve or revive.
-    if (!text.includes(`"${TAG}"`)) return parsed as Record<string, unknown>;
+    if (!text.includes(`"${TAG}"`)) return { parsed, tagged: false };
     if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);
     }
-    return revive(parsed, container, values) as Record<string, unknown>;
+    return { parsed, tagged: true };
+  }
+
+  /** An island's props, with values, slots and actions revived. */
+  function readProps(container: Element, id: string): Record<string, unknown> {
+    const { parsed, tagged } = parseProps(container, id);
+    return (tagged ? revive(parsed, container, values) : parsed) as Record<string, unknown>;
   }
 
   const topLevel = (scope: ParentNode) =>
@@ -926,17 +993,45 @@ export function createHydrationRuntime(options: HydrationOptions) {
       const previous = pairs.get(container);
       const record = previous && roots.get(previous);
       if (!previous || !record || !id) continue;
-      try {
-        const props = readProps(container, id);
+      const failed = (error: unknown) =>
+        report(`Could not keep ${keyOf(container)} across the refresh.`, error);
+      const show = (props: Record<string, unknown>) => {
         record.root.render(
           element(previous, record.Component, props, record.restore, record.position),
         );
         record.props = props;
         record.wire = wire;
+      };
+      try {
+        const { parsed, tagged } = parseProps(container, id);
+        const trees = new Set<string>();
+        if (tagged) collectTreeSlots(parsed, trees);
+        if (trees.size === 0) {
+          record.carry = undefined;
+          show((tagged ? revive(parsed, container, values) : parsed) as Record<string, unknown>);
+          container.replaceWith(previous);
+          carried++;
+          continue;
+        }
+        // Server trees in the props rebuild first (their client modules load): the live island
+        // keeps its place now and takes its new props once they are ready. Its slots are found
+        // before it leaves the page it came in.
+        const names = new Set<string>();
+        collectSlots(parsed, names);
+        capturedSlots.set(
+          container,
+          new Map(Array.from(names, (name) => [name, findSlot(container, name)])),
+        );
+        const turn = Symbol("carry");
+        record.carry = turn;
         container.replaceWith(previous);
         carried++;
+        prepareValueSlots!(container, trees).then(() => {
+          if (record.carry !== turn || roots.get(previous) !== record) return;
+          show(revive(parsed, container, values) as Record<string, unknown>);
+        }, failed);
       } catch (error) {
-        report(`Could not keep ${keyOf(container)} across the refresh.`, error);
+        failed(error);
       }
     }
     return carried;

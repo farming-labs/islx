@@ -61,6 +61,11 @@ export const TAG = "$";
 export const TAG_VALUE = "v";
 /** The key of an action's sealed captured values. */
 export const TAG_BOUND = "b";
+/**
+ * The key of the arguments an action argument was bound to in the browser (`.bind`), tagged: they
+ * come after its sealed values, and the server seals them all again if it sends the action back.
+ */
+export const TAG_BROWSER_BOUND = "c";
 
 /** `{"$":"r","v":key}`: a value sent once, by key. */
 export const REFERENCE_TAG = "r";
@@ -88,7 +93,10 @@ export const SLOT_HOST_FIELD = "h";
  * them from, so their client components are live, as React Server Components return them.
  */
 export const ELEMENT_TAG = "x";
-/** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
+/**
+ * `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. An action argument may
+ * also carry `"c"`, the arguments the browser bound it to.
+ */
 export const ACTION_TAG = "a";
 /**
  * `{"$":"T","v":name}`: a promise an island receives, settled by the `f/promise` script `name`.
@@ -110,6 +118,13 @@ export const OBJECT_TAG = "o";
 export const FORM_DATA_TAG = "F";
 /** `{"$":"K","v":n}`: a `Blob` or `File` argument, sent as a field of a multipart call. */
 export const BLOB_TAG = "K";
+/**
+ * `{"$":"t","v":n}`: a value the browser sent to a server action that the codec cannot carry (an
+ * element, a function that is not an action, a class instance, a local symbol), by its index in
+ * the call. The action receives a stand-in it can only return; the browser then gets its own value
+ * back, as React Server Components send a temporary reference.
+ */
+export const TEMPORARY_TAG = "t";
 /** The multipart field of a call's JSON (`{"a":…,"b":…}`) when it carries form data or files. */
 export const CALL_FIELD = "$F_CALL";
 /** The multipart field name of attachment `n`, or of field `key` of `FormData` attachment `n`. */
@@ -198,7 +213,11 @@ export function getTag(value: unknown): string | undefined {
   const keys = Object.keys(value);
   if (keys.length === 1) return tag;
   if (keys.length === 2 && TAG_VALUE in value) return tag;
-  if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
+  if (
+    tag === ACTION_TAG &&
+    TAG_VALUE in value &&
+    keys.length === 2 + Number(TAG_BOUND in value) + Number(TAG_BROWSER_BOUND in value)
+  ) {
     return tag;
   }
   if (

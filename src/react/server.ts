@@ -5,7 +5,7 @@
 import * as React from "react";
 import { fromStreamSteps, getStreamKind, toStreamSteps, type StreamStep } from "../protocol/stream";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
-import { encode, plainObject } from "../protocol/codec";
+import { encode, readIterator, setIteratorEntries } from "../protocol/codec";
 import {
   FORM_STATE_SCRIPT_TYPE,
   PROMISE_TAG,
@@ -18,6 +18,8 @@ import {
 import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
+import { encodeSentObject, prepareBlobs } from "../server/blobs";
+import { isTemporaryReference } from "../server/temporary";
 import { getBuildDefaults } from "../server/build";
 import { RenderedElements, setActionResultRenderer, type ReactFormState } from "../server/handle";
 import {
@@ -26,7 +28,13 @@ import {
   parseHeldValues,
   selectValuesToSend,
 } from "../server/values";
-import { getContexts, getWireSteps, runtimeTagged, setIslandServerHook } from "./island";
+import {
+  getContexts,
+  getWireSteps,
+  runtimeTagged,
+  setIslandServerHook,
+  type IslandPromiseEntry,
+} from "./island";
 import { renderSlotTree } from "./tree";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
@@ -51,24 +59,54 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 setIslandServerHook({
-  encode(props, held) {
-    const promises: Array<{ name: string; promise: PromiseLike<unknown> }> = [];
+  encode(props, held, context, ancestors) {
+    const promises: IslandPromiseEntry[] = [];
+    const named = context?.named;
     const addressed = addressValues(props, {
-      encodeSpecial: (value) => {
+      ancestors,
+      encodeSpecial: (value, above) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        if (isTemporaryReference(value)) {
+          throw new TypeError(
+            "a value the browser sent to a server action can be returned to it, but not passed to a client component's props",
+          );
+        }
+        const sent = encodeSentObject(value);
+        if (sent) return sent;
+        const known = value && typeof value === "object" ? named?.get(value) : undefined;
+        if (known) return known;
         const kind = getStreamKind(value);
         if (kind) {
           // Sent as the promise of its first step, which settles as the stream is read. A stream
           // the island split already has its steps.
           const name = nextPromiseName();
           const split = getWireSteps(value as object);
-          promises.push({ name, promise: split?.first ?? toStreamSteps(value as object, kind) });
-          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: split?.kind ?? kind };
+          promises.push({
+            name,
+            promise: split?.first ?? toStreamSteps(value as object, kind),
+            ancestors: above(),
+            step: true,
+          });
+          const tag = {
+            [TAG]: STREAM_TAG,
+            [TAG_VALUE]: name,
+            [STREAM_KIND_FIELD]: split?.kind ?? kind,
+          };
+          named?.set(value as object, tag);
+          return tag;
         }
         if (isThenable(value)) {
           const name = nextPromiseName();
-          promises.push({ name, promise: value });
-          return { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
+          const inherited = context?.nextSteps.get(value);
+          promises.push({
+            name,
+            promise: value,
+            ancestors: inherited ?? above(),
+            step: !!inherited,
+          });
+          const tag = { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
+          named?.set(value as object, tag);
+          return tag;
         }
         if (typeof value === "function") {
           const reference = encodeActionReference(value);
@@ -87,6 +125,7 @@ setIslandServerHook({
       promises,
     };
   },
+  prepare: prepareBlobs,
   escape: escapeScriptJson,
   address(payload, skip) {
     const addressed = addressValues(payload, { encoded: true });
@@ -204,48 +243,137 @@ async function renderResultElements(element: React.ReactElement): Promise<Render
 }
 
 /**
- * The value with each React element in it rendered; anything else stays as it is. Boxed: an async
- * function that returned a promise the action returned would wait for it, and the browser would
- * get its value instead of the promise.
+ * One action result's render: each object and array becomes one copy, made before what is inside
+ * it, so a value that refers to itself refers to its copy; each promise and stream is wrapped
+ * once. What a promise or stream settles to renders after what came before it, so it reuses those
+ * copies: a promise that settles to the object holding it gives back that object's copy.
  */
-async function renderInResult(value: unknown, ancestors: Set<object>): Promise<{ value: unknown }> {
-  if (React.isValidElement(value)) return { value: await renderResultElements(value) };
-  if (!value || typeof value !== "object" || ancestors.has(value)) return { value };
-  // What a promise or a stream settles to renders as it settles. The callbacks are attached here,
-  // inside the framework's `run`, so they render with the request's context too.
-  if (isThenable(value)) return { value: Promise.resolve(value).then(renderResult) };
-  const kind = getStreamKind(value);
-  if (kind) return { value: fromStreamSteps(renderSteps(toStreamSteps(value, kind)), kind) };
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const entries = await Promise.all(value.map((entry) => renderInResult(entry, ancestors)));
-      return entries.some((entry, index) => entry.value !== value[index])
-        ? { value: entries.map((entry) => entry.value) }
-        : { value };
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return { value };
-    const entries = await Promise.all(
-      Object.entries(value).map(
-        async ([key, entry]) =>
-          [key, entry, (await renderInResult(entry, ancestors)).value] as const,
-      ),
-    );
-    if (entries.every(([, entry, rendered]) => entry === rendered)) return { value };
-    return { value: plainObject(entries.map(([key, , rendered]) => [key, rendered])) };
-  } finally {
-    ancestors.delete(value);
-  }
+interface ResultRender {
+  copies: WeakMap<object, unknown>;
+  wrapped: WeakMap<object, unknown>;
+  /** The renders so far, in order. */
+  queue: Promise<unknown>;
 }
 
-const renderResult = async (value: unknown) => (await renderInResult(value, new Set())).value;
+/** Elements rendering: the copy holds a placeholder until they have. */
+class RenderingElements {
+  constructor(readonly done: Promise<RenderedElements>) {}
+}
+
+/**
+ * The value with each React element in it rendered and the rest copied. `pending` collects the
+ * element renders still running, which set their place in the copy once done.
+ */
+function renderInResult(value: unknown, render: ResultRender, pending: Promise<void>[]): unknown {
+  if (!value || typeof value !== "object") return value;
+  if (React.isValidElement(value)) return new RenderingElements(renderResultElements(value));
+  const copied = render.copies.get(value) ?? render.wrapped.get(value);
+  if (copied !== undefined) return copied;
+  // What a promise or a stream settles to renders as it settles. The callbacks are attached here,
+  // inside the framework's `run`, so they render with the request's context too.
+  if (isThenable(value)) {
+    const wrapped = Promise.resolve(value).then((settled) => renderLater(settled, render));
+    render.wrapped.set(value, wrapped);
+    return wrapped;
+  }
+  const kind = getStreamKind(value);
+  if (kind) {
+    const wrapped = fromStreamSteps(renderSteps(toStreamSteps(value, kind), render), kind);
+    render.wrapped.set(value as object, wrapped);
+    return wrapped;
+  }
+  const place = (rendered: unknown, set: (value: unknown) => void) => {
+    if (rendered instanceof RenderingElements) pending.push(rendered.done.then(set));
+    else set(rendered);
+  };
+  if (Array.isArray(value)) {
+    const copy: unknown[] = Array.from({ length: value.length });
+    render.copies.set(value, copy);
+    value.forEach((entry, index) => {
+      place(renderInResult(entry, render, pending), (rendered) => (copy[index] = rendered));
+    });
+    return copy;
+  }
+  // An iterator travels as its entries (read once), rendered like an array's.
+  const entries = readIterator(value);
+  if (entries) {
+    const copy: unknown[] = Array.from({ length: entries.length });
+    const iterator = copy.values();
+    setIteratorEntries(iterator, copy);
+    render.copies.set(value, iterator);
+    entries.forEach((entry, index) => {
+      place(renderInResult(entry, render, pending), (rendered) => (copy[index] = rendered));
+    });
+    return iterator;
+  }
+  // A map's or set's entries render in order, keys too, once each is ready.
+  if (value instanceof Map || value instanceof Set) {
+    const copy = value instanceof Map ? new Map<unknown, unknown>() : new Set<unknown>();
+    render.copies.set(value, copy);
+    const entries: unknown[][] = Array.from(
+      value instanceof Map ? value : value.values(),
+      (entry) => (value instanceof Map ? (entry as [unknown, unknown]).slice() : [entry]),
+    );
+    const filling: Promise<void>[] = [];
+    for (const entry of entries) {
+      entry.forEach((part, index) => {
+        const rendered = renderInResult(part, render, pending);
+        if (rendered instanceof RenderingElements) {
+          filling.push(rendered.done.then((done) => void (entry[index] = done)));
+        } else entry[index] = rendered;
+      });
+    }
+    const add = () => {
+      for (const entry of entries) {
+        if (copy instanceof Map) copy.set(entry[0], entry[1]);
+        else copy.add(entry[0]);
+      }
+    };
+    if (filling.length === 0) add();
+    else pending.push(Promise.all(filling).then(add));
+    return copy;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  const copy = Object.create(prototype) as Record<string, unknown>;
+  render.copies.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    const set = (rendered: unknown) =>
+      Object.defineProperty(copy, key, {
+        value: rendered,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    // Its place first, so the copy keeps the order of the keys while elements render.
+    set(undefined);
+    place(renderInResult(entry, render, pending), set);
+  }
+  return copy;
+}
+
+/** Renders `value` once every render before it finished, so it reuses their copies. */
+function renderLater(value: unknown, render: ResultRender): Promise<unknown> {
+  const done = render.queue.then(async () => {
+    const pending: Promise<void>[] = [];
+    const rendered = renderInResult(value, render, pending);
+    await Promise.all(pending);
+    return rendered instanceof RenderingElements ? await rendered.done : rendered;
+  });
+  render.queue = done.catch(() => {});
+  return done;
+}
+
+const renderResult = (value: unknown) =>
+  renderLater(value, { copies: new WeakMap(), wrapped: new WeakMap(), queue: Promise.resolve() });
 
 /** Each step's chunk and return value, rendered. Steps are read as they arrive, as before. */
-function renderSteps(steps: PromiseLike<StreamStep>): Promise<StreamStep> {
+function renderSteps(steps: PromiseLike<StreamStep>, render: ResultRender): Promise<StreamStep> {
   return Promise.resolve(steps).then(async (step): Promise<StreamStep> => {
-    if (!("d" in step)) return { v: await renderResult(step.v), n: renderSteps(step.n) };
-    return step.v === undefined ? step : { d: 1, v: await renderResult(step.v) };
+    if (!("d" in step)) {
+      return { v: await renderLater(step.v, render), n: renderSteps(step.n, render) };
+    }
+    return step.v === undefined ? step : { d: 1, v: await renderLater(step.v, render) };
   });
 }
 

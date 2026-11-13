@@ -31,6 +31,7 @@ import {
   SLOT_TAG,
   TAG,
   TAG_VALUE,
+  TEMPORARY_TAG,
   getTag,
 } from "./wire";
 
@@ -83,6 +84,11 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
   switch (typeof value) {
     case "undefined":
       return tagged("u");
+    case "symbol": {
+      // Only a global symbol is the same symbol in the browser, as React Server Components send it.
+      const key = Symbol.keyFor(value);
+      return key === undefined ? undefined : tagged("y", key);
+    }
     case "bigint":
       return tagged("B", value.toString());
     case "number":
@@ -102,6 +108,8 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
   }
   if (typeof URL === "function" && value instanceof URL) return tagged("U", value.href);
   if (value instanceof RegExp) return tagged("R", [value.source, value.flags]);
+  // Its message and stack stay on the server, as React Server Components send one in production.
+  if (value instanceof Error) return tagged("Z");
   if (value instanceof ArrayBuffer) {
     return tagged("Y", ["ArrayBuffer", toBase64(new Uint8Array(value))]);
   }
@@ -112,6 +120,39 @@ export function encodeLeaf(value: unknown): Record<string, unknown> | undefined 
     return tagged("Y", [name, toBase64(bytes)]);
   }
   return undefined;
+}
+
+/** The message of an error a server sent: its own stays there. */
+export const SERVER_ERROR_MESSAGE =
+  "An error occurred on the server. Its message is omitted so it does not leak server details.";
+
+// The entries of each iterator read so far: reading consumes it, and a value may be encoded twice.
+const iteratorEntries = new WeakMap<object, unknown[]>();
+
+/**
+ * The entries of an iterator that is its own iterable (a generator, `set.values()`), which travels
+ * as its entries and arrives as an iterator over them, as React Server Components send it; or
+ * undefined for any other value.
+ */
+export function readIterator(value: unknown): unknown[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const known = iteratorEntries.get(value);
+  if (known) return known;
+  const iterate = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
+  if (typeof iterate !== "function" || value instanceof Map || value instanceof Set)
+    return undefined;
+  if (ArrayBuffer.isView(value) || typeof (value as { next?: unknown }).next !== "function") {
+    return undefined;
+  }
+  if (iterate.call(value) !== value) return undefined;
+  const entries = Array.from(value as Iterable<unknown>);
+  iteratorEntries.set(value, entries);
+  return entries;
+}
+
+/** Registers `entries` as what `iterator` holds, for an iterator made from entries already read. */
+export function setIteratorEntries(iterator: object, entries: unknown[]): void {
+  iteratorEntries.set(iterator, entries);
 }
 
 /** Returned by `decodeTagged` for the runtime's reference tags (`r`, `s`, `a`). */
@@ -159,6 +200,7 @@ export function decodeTagged(
     case ACTION_TAG:
     case FORM_DATA_TAG:
     case BLOB_TAG:
+    case TEMPORARY_TAG:
     case PROMISE_TAG:
     case STREAM_TAG:
     case CYCLE_TAG:
@@ -219,6 +261,35 @@ export function decodeTagged(
     case "S":
       if (Array.isArray(data)) return new Set(data.map(decodeChild));
       break;
+    case "y":
+      if (typeof data === "string") return Symbol.for(data);
+      break;
+    case "Z":
+      return new Error(SERVER_ERROR_MESSAGE);
+    case "i":
+      if (Array.isArray(data)) return data.map(decodeChild)[Symbol.iterator]();
+      break;
+    case "b":
+      if (Array.isArray(data) && typeof data[0] === "string" && typeof data[1] === "string") {
+        return new Blob([fromBase64(data[1]) as Uint8Array<ArrayBuffer>], { type: data[0] });
+      }
+      break;
+    case "f":
+      if (
+        Array.isArray(data) &&
+        data.every((entry) => Array.isArray(entry) && entry.length === 2)
+      ) {
+        const form = new FormData();
+        for (const [name, entry] of data as [unknown, unknown][]) {
+          const value = decodeChild(entry);
+          if (typeof name !== "string" || !(typeof value === "string" || value instanceof Blob)) {
+            break;
+          }
+          form.append(name, value);
+        }
+        return form;
+      }
+      break;
     default:
       throw new TypeError(`unknown ${JSON.stringify(tag)} tag`);
   }
@@ -265,11 +336,23 @@ export interface EncodeOptions {
   encodeFunction?: (value: Function) => unknown;
   /**
    * Encodes an object the codec cannot carry itself (`FormData`, a `Blob`), or returns
-   * undefined to refuse it.
+   * undefined to refuse it. `ancestors` lists the objects, arrays, maps and sets above it,
+   * outermost first.
    */
-  encodeObject?: (value: object) => unknown;
+  encodeObject?: (value: object, ancestors: () => readonly object[]) => unknown;
+  /**
+   * Encodes a value the codec cannot carry otherwise (an element, a function `encodeFunction`
+   * refused, a class instance `encodeObject` refused, a local symbol) as a temporary reference, or
+   * returns undefined to refuse it. A promise or a stream is never one.
+   */
+  encodeTemporary?: (value: unknown) => unknown;
   /** Names the root of the value in error messages. */
   path?: readonly (string | number)[];
+  /**
+   * The objects, arrays, maps and sets above the value, outermost first, when it continues
+   * another value (a promise's settled value): a cycle reference inside can name them.
+   */
+  ancestors?: readonly object[];
 }
 
 /**
@@ -281,9 +364,14 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
   // The objects, arrays, maps and sets above the value, by depth: one met again inside itself
   // travels as the number of levels up to it, as React Server Components send it.
   const depths = new Map<object, number>();
+  for (const ancestor of options.ancestors ?? []) depths.set(ancestor, depths.size);
   const path: (string | number)[] = [...(options.path ?? [])];
   const fail = (reason: string): never => {
     throw new EncodeError(reason, path);
+  };
+  const temporary = (value: unknown, reason: string): unknown => {
+    const encoded = options.encodeTemporary?.(value);
+    return encoded === undefined ? fail(reason) : encoded;
   };
   const visit = (value: unknown): unknown => {
     const leaf = encodeLeaf(value);
@@ -292,9 +380,25 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
     if (typeof value === "number") return value;
     if (typeof value === "function") {
       const encoded = options.encodeFunction?.(value);
-      return encoded === undefined ? fail("functions are not serializable") : encoded;
+      return encoded === undefined ? temporary(value, "functions are not serializable") : encoded;
     }
-    if (typeof value !== "object") return fail(`${typeof value} values are not serializable`);
+    if (typeof value !== "object") {
+      return temporary(value, `${typeof value} values are not serializable`);
+    }
+    const entries = readIterator(value);
+    if (entries) {
+      return tagged(
+        "i",
+        entries.map((entry, index) => {
+          path.push(index);
+          try {
+            return visit(entry);
+          } finally {
+            path.pop();
+          }
+        }),
+      );
+    }
     const depth = depths.get(value);
     if (depth !== undefined) return tagged(CYCLE_TAG, depths.size - depth);
     depths.set(value, depths.size);
@@ -338,15 +442,20 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
         );
       }
       if (typeof (value as { $$typeof?: unknown }).$$typeof === "symbol") {
-        return fail("elements (JSX) are not serializable");
+        return temporary(value, "elements (JSX) are not serializable");
       }
       const prototype = Object.getPrototypeOf(value);
       // A plain object that is an async iterable is a stream, not its (symbol-keyed) fields.
       if ((prototype !== Object.prototype && prototype !== null) || getStreamKind(value)) {
-        const special = options.encodeObject?.(value as object);
+        const special = options.encodeObject?.(value as object, () =>
+          Array.from(depths.keys()).slice(0, -1),
+        );
         if (special !== undefined) return special;
         const name = (value as object).constructor?.name;
-        return fail(`class instances${name ? ` (${name})` : ""} are not serializable`);
+        const reason = `class instances${name ? ` (${name})` : ""} are not serializable`;
+        const pending =
+          getStreamKind(value) || typeof (value as { then?: unknown }).then === "function";
+        return pending ? fail(reason) : temporary(value, reason);
       }
       const encoded = plainObject(
         Object.entries(value).map(([key, entry]): [string, unknown] => {
@@ -372,7 +481,12 @@ export interface DecodeOptions {
    * it. Without it, every reference throws: input from a browser must not name the runtime's own
    * references unless the caller checks them.
    */
-  decodeReference?: (object: Record<string, unknown>) => unknown;
+  decodeReference?: (
+    object: Record<string, unknown>,
+    ancestors: () => readonly unknown[],
+  ) => unknown;
+  /** The containers above the value when it continues another, as `EncodeOptions.ancestors`. */
+  ancestors?: readonly unknown[];
 }
 
 /**
@@ -390,7 +504,7 @@ export function resolveCycle(ancestors: readonly unknown[], levels: unknown): un
 /** Decodes what `encode` produced, after `JSON.parse`. Reference tags are rejected by default. */
 export function decode(value: unknown, options: DecodeOptions = {}): unknown {
   // Containers exist before their contents, so a cycle reference inside can name them.
-  const ancestors: unknown[] = [];
+  const ancestors: unknown[] = [...(options.ancestors ?? [])];
   const fill = <T>(into: T, add: (into: T) => void): T => {
     ancestors.push(into);
     try {
@@ -428,7 +542,7 @@ export function decode(value: unknown, options: DecodeOptions = {}): unknown {
       }
       const decoded = decodeTagged(object, visit);
       if (decoded !== NOT_A_VALUE) return decoded;
-      const reference = options.decodeReference?.(object);
+      const reference = options.decodeReference?.(object, () => ancestors.slice());
       if (reference !== undefined) return reference;
       throw new TypeError(`a ${JSON.stringify(object[TAG])} reference is not allowed here`);
     }

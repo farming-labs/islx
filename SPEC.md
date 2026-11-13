@@ -56,7 +56,7 @@ whose own props are `p`. An object with any other keys is data.
 | --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `r` | a value sent once                                                          | its key                                                                                                                                                                 |
 | `s` | a slot                                                                     | its name                                                                                                                                                                |
-| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values                                                                                                             |
+| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values; `c`, on an argument, the arguments the browser bound it to                                                 |
 | `x` | React elements a server action returned (results only)                     | `{"s":scope,"h":html}`: their server HTML, with the server tree named `scope` that the browser rebuilds them from                                                       |
 | `o` | app data with a `$` key                                                    | the object                                                                                                                                                              |
 | `u` | `undefined`                                                                |                                                                                                                                                                         |
@@ -68,6 +68,11 @@ whose own props are `p`. An object with any other keys is data.
 | `U` | `URL`                                                                      | `href`                                                                                                                                                                  |
 | `R` | `RegExp`                                                                   | `[source, flags]`                                                                                                                                                       |
 | `Y` | bytes                                                                      | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name                                                                                               |
+| `y` | a global symbol                                                            | its key: `Symbol.for(key)` in the browser                                                                                                                               |
+| `Z` | an `Error`                                                                 | none: the browser gets an error whose message says the server kept its own, and so does an island's server render                                                       |
+| `i` | an iterator that is its own iterable (a generator, `set.values()`)         | `[value, …]`, read once on the server; an iterator over them in the browser                                                                                             |
+| `b` | a `Blob` the server sends (a `File` arrives as one)                        | `[type, base64]`, read before the value is encoded                                                                                                                      |
+| `f` | a `FormData` the server sends                                              | `[[name, value], …]`, each value a string or `b`                                                                                                                        |
 | `T` | a promise an island receives                                               | its name; its outcome arrives in the `f/promise` script of that name                                                                                                    |
 | `W` | a stream an island receives (`ReadableStream`, async iterable or iterator) | its first step's promise name, and `k`: `r`, `i` or `t`; each step is `{"v":chunk,"n":next promise}`, or `{"d":1}` at the end (with the iterator's return value as `v`) |
 | `C` | a value that contains itself                                               | how many levels up it is: 1 is the object, array, `Map` or `Set` holding it, and only those count                                                                       |
@@ -76,6 +81,7 @@ whose own props are `p`. An object with any other keys is data.
 | `L` | a layout tree's outlet, where the page renders                             | `n`: the outlet's name, `children` for the page                                                                                                                         |
 | `F` | a `FormData` action argument                                               | its index among the call's attachments                                                                                                                                  |
 | `K` | a `Blob` or `File` action argument                                         | its index among the call's attachments                                                                                                                                  |
+| `t` | a value an action argument held that the codec cannot carry                | its index in the call; the action receives a stand-in it can only return, and the browser gets its own value back                                                       |
 
 The browser resolves `r` first (from its value store), then decodes the rest. Inside `o`, only
 the object's properties are read; the object itself is never a tag. Unknown tags are errors.
@@ -137,6 +143,11 @@ action checks its inputs and the caller's rights like any other request handler.
 
 An action's **bound values** are the variables an inline action captured, then arguments added
 with `.bind` on the server. They travel sealed (below) and come before the call's own arguments.
+Arguments bound in the browser travel with each call. An action the browser bound and sends as an
+argument carries them as `c`, tagged like any argument, after its sealed values. The server runs
+it with its opened sealed values first and `c` after, never in their place: a reference without
+the sealed values its captured variables need is refused. Bound again on the server and sent back,
+the action seals all of them again.
 
 **Called from JavaScript:**
 
@@ -152,9 +163,14 @@ A single `FormData` argument is sent as `multipart/form-data` instead, with the 
 the `$F_BOUND` field. Arguments that hold `FormData` or files anywhere (as `useActionState`'s
 `(previousState, formData)`) are sent as multipart too: the JSON goes in the `$F_CALL` field,
 attachment `n` is `{"$":"F","v":n}` or `{"$":"K","v":n}` in it, a file travels as field `$F_n`
-and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server. Elements in a settled value travel as `x`, rendered when the value settles.
+and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server. Elements in a settled value travel as `x`, rendered when the value settles. A promise or stream met again keeps its first name. A settled value continues the containers above the promise where it was first met, so a `C` inside counts up through them (the `{"v":…}` wrapper counts as one level); a stream's next step continues the stream's containers, not the step before it. In props, a promise or stream met again in the same island keeps its first name too, and its settled value (a `f/promise` script's `v`) continues the containers above it the same way.
 Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
-registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
+registered; never `r` or `s`. A value the codec cannot carry (an element, a function that is not
+an action, a class instance other than a promise or stream, a local symbol) travels as `t`, its
+index in the call, as React Server Components send a temporary reference. The action receives a
+stand-in: reading or changing it throws, and so does passing it to a client component's props. Returned, it goes
+back as the same `t`, and the browser puts its own value there. A stand-in only goes back in the
+result of the call that sent it. The browser runs calls one at a time, in order, and refreshes the
 page after each one (a redirect navigates instead).
 
 **Posted by a form without JavaScript:** React writes the fields while it renders the form, for

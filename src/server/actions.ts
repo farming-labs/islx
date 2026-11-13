@@ -14,9 +14,11 @@ import {
   FORM_REF_PREFIX,
   TAG,
   TAG_BOUND,
+  TAG_BROWSER_BOUND,
   TAG_VALUE,
   formFieldName,
 } from "../protocol/wire";
+import { readIterator } from "../protocol/codec";
 import { getBuildDefaults } from "./build";
 import {
   type ActionKeys,
@@ -55,7 +57,10 @@ interface ReferenceState {
   captured: (() => unknown[]) | null;
   capturedValues?: unknown[];
   names: readonly string[];
-  /** Arguments added with `.bind`, in order. */
+  /**
+   * Arguments added with `.bind`, in order. On a reference the browser sent, they come after its
+   * sealed values: the ones it bound in the browser, then any bound on the server.
+   */
   bound: unknown[];
   /** The sealed values, once sealing started; `null` when there is nothing to seal. */
   sealed?: Settled<string> | null;
@@ -168,10 +173,24 @@ function pendingNested(values: unknown[]): Settled<string>[] {
         visit(entry);
       }
     } else if (value instanceof Set) for (const entry of value) visit(entry);
-    else for (const entry of Object.values(value)) visit(entry);
+    else (readIterator(value) ?? Object.values(value)).forEach(visit);
   };
   values.forEach(visit);
   return pending;
+}
+
+/**
+ * Seals the values of the actions in `value` (an action's result), so encoding it, which is
+ * synchronous, reads them sealed. Null when nothing is sealing.
+ */
+export function prepareSeals(value: unknown): Promise<void> | null {
+  const pending = pendingNested([value]);
+  if (pending.length === 0) return null;
+  return (async () => {
+    for (let next = pending; next.length > 0; next = pendingNested([value])) {
+      await Promise.all(next);
+    }
+  })();
 }
 
 /**
@@ -180,19 +199,27 @@ function pendingNested(values: unknown[]): Settled<string>[] {
  */
 function startSeal(state: ReferenceState): Settled<string> | null {
   if (state.sealed !== undefined) return state.sealed;
-  if (state.token !== undefined) {
+  if (state.token !== undefined && state.bound.length === 0) {
     state.sealed = settle(Promise.resolve(state.token));
     state.sealed.status = "fulfilled";
     state.sealed.value = state.token;
     return state.sealed;
   }
-  const values = boundValues(state);
-  if (values.length === 0) return (state.sealed = null);
+  // A reference the browser sent and that was bound again seals its opened values with the rest.
+  const known = state.token === undefined ? boundValues(state) : null;
+  if (known && known.length === 0) return (state.sealed = null);
   const label = registry().get(state.id)?.label;
-  const names = [...state.names, ...state.bound.map((_, index) => `bound argument ${index + 1}`)];
   // Marked pending first: a reference that captures itself must not recurse.
   state.sealed = settle(
     (async () => {
+      const values = known ?? (await referenceValues(state));
+      const opened = values.length - state.bound.length;
+      const names = [
+        ...(known
+          ? state.names
+          : Array.from({ length: opened }, (_, index) => `sealed value ${index + 1}`)),
+        ...state.bound.map((_, index) => `bound argument ${index + 1}`),
+      ];
       const keys = await actionKeys();
       for (
         let pending = pendingNested(values);
@@ -235,12 +262,24 @@ function readSealed(state: ReferenceState): string | undefined {
   throw sealed;
 }
 
+/**
+ * The values a reference runs with. A reference the browser sent opens its sealed values, which
+ * hold the captured variables, and adds what was bound after: never the browser's in their place.
+ */
+async function referenceValues(state: ReferenceState): Promise<unknown[]> {
+  if (state.captured) return boundValues(state);
+  const opened = state.token !== undefined ? await openToken(state.id, state.token) : [];
+  const captured = registry().get(state.id)?.captured ?? 0;
+  if (opened.length < captured) {
+    throw new TypeError(`server action ${state.id} was sent without its captured values`);
+  }
+  return [...opened, ...state.bound];
+}
+
 async function invoke(state: ReferenceState, args: unknown[]): Promise<unknown> {
   const entry = registry().get(state.id);
   if (!entry) throw new Error(`server action ${state.id} is not registered`);
-  const values =
-    state.token !== undefined ? await openToken(state.id, state.token) : boundValues(state);
-  return runEntry(entry, values, args);
+  return runEntry(entry, await referenceValues(state), args);
 }
 
 function runEntry(entry: ActionEntry, values: unknown[], args: unknown[]): unknown {
@@ -279,15 +318,13 @@ function attachHooks(reference: AnyFunction, state: ReferenceState): void {
     return id === state.id && boundCount === state.bound.length;
   });
   define("bind", function (this: unknown, _thisArg: unknown, ...args: unknown[]) {
-    if (state.token !== undefined) {
-      throw new TypeError("a server action received from the browser cannot be bound again");
-    }
     return createReference({
       id: state.id,
       captured: state.captured,
       capturedValues: state.capturedValues,
       names: state.names,
       bound: [...state.bound, ...args],
+      token: state.token,
     });
   });
 }
@@ -384,12 +421,22 @@ function decodeNestedReference(object: Record<string, unknown>): unknown {
 
 /**
  * Decodes an action reference the browser sent back (an argument): an id this server registered,
- * whose sealed values open when it runs. Unknown ids are refused.
+ * whose sealed values open when it runs. Unknown ids are refused. `decodeBound` decodes the
+ * arguments the browser bound it to (`c`); without it, a reference that has them is refused.
  */
-export function decodeActionReference(object: Record<string, unknown>): AnyFunction | undefined {
+export function decodeActionReference(
+  object: Record<string, unknown>,
+  decodeBound?: (value: unknown) => unknown,
+): AnyFunction | undefined {
   if (object[TAG] !== ACTION_TAG || typeof object[TAG_VALUE] !== "string") return undefined;
   if (!registry().has(object[TAG_VALUE])) return undefined;
-  return decodeNestedReference(object) as AnyFunction | undefined;
+  if (!(TAG_BROWSER_BOUND in object))
+    return decodeNestedReference(object) as AnyFunction | undefined;
+  const token = object[TAG_BOUND];
+  if (!decodeBound || (token !== undefined && typeof token !== "string")) return undefined;
+  const bound = decodeBound(object[TAG_BROWSER_BOUND]);
+  if (!Array.isArray(bound) || bound.length === 0) return undefined;
+  return createReference({ id: object[TAG_VALUE], captured: null, names: [], bound, token });
 }
 
 // --- Running ---------------------------------------------------------------------------------

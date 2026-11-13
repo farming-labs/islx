@@ -3,6 +3,7 @@ import {
   Suspense,
   act,
   cloneElement,
+  isValidElement,
   createContext,
   useContext,
   createElement as h,
@@ -14,6 +15,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIsland, useFormStatus } from "@farm.js/islx/react";
 import {
@@ -22,6 +24,7 @@ import {
   scheduleHydration,
 } from "@farm.js/islx/react/client";
 import { renderToStream } from "@farm.js/islx/react/server";
+import { createTemporaryReferences } from "../src/server/temporary";
 import { enhanceForms, getValueStore } from "@farm.js/islx/client";
 import {
   configureActionKeys,
@@ -453,6 +456,49 @@ describe("islands", () => {
     expect(document.querySelector("[data-counter=kept]")!.textContent).toBe("kept 1");
   });
 
+  it("keep an island's state across a refresh when its props hold client components", async () => {
+    const errors = spyErrors();
+    function Framed({ panel, title }: { panel: ReactNode; title: string }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-framed": "", onClick: () => setClicks(clicks + 1) },
+          `${title} ${clicks}`,
+        ),
+        panel,
+      );
+    }
+    modules["/src/framed.tsx"] = { Framed };
+    const FramedIsland = createIsland(Framed, "/src/framed.tsx", "Framed");
+    const page = (title: string) =>
+      h(
+        "div",
+        { id: "page" },
+        h(FramedIsland, { title, panel: h(CounterIsland, { start: 0, label: "inner" }) }),
+      );
+    const islands = await mount(await html(page("first")));
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-framed]")!.click());
+    expect(document.querySelector("[data-framed]")!.textContent).toBe("first 1");
+    const next = document.createElement("div");
+    next.innerHTML = await html(page("second"));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(1);
+      current.replaceWith(next.firstElementChild!);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-framed]")!.textContent).toBe("second 1");
+    });
+    const inner = document.querySelector<HTMLButtonElement>('[data-counter="inner"]')!;
+    await act(async () => inner.click());
+    expect(document.querySelector('[data-counter="inner"]')!.textContent).toBe("inner 1");
+    expect(errors()).toEqual([]);
+  });
+
   it("wait for a streamed island's props, which arrive after it, instead of failing", async () => {
     const markup = await html(h(CounterIsland, { start: 0, label: "late" }));
     const props = markup.match(/<script type="f\/props"[^>]*>.*?<\/script>/)![0];
@@ -586,6 +632,11 @@ describe("islands", () => {
     await expect(
       html(h(ShowsIsland, { at: new Date(0), tags: [], id: new Point() })),
     ).rejects.toThrow("Shows (/src/shows.tsx)");
+    // A value the browser sent to an action goes back as a value only, never into an island.
+    const sent = createTemporaryReferences().decode(0);
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: sent as never })),
+    ).rejects.toThrow(/Shows \(\/src\/shows\.tsx\).*not passed to a client component's props/);
   });
 
   it("render the elements a promise prop resolves to, and hydrate them, as React Server Components do", async () => {
@@ -617,6 +668,159 @@ describe("islands", () => {
       document.querySelector<HTMLButtonElement>('[data-counter="inner"]')!.click(),
     );
     expect(document.querySelector('[data-counter="inner"]')!.textContent).toBe("inner 5");
+    expect(errors()).toEqual([]);
+  });
+
+  it("settle a promise prop to the object holding it, as React Server Components do", async () => {
+    const errors = spyErrors();
+    type Holder = { name: string; self?: Promise<Holder>; list: Holder[] };
+    function Owner({ holder }: { holder: Holder }) {
+      const settled = use(holder.self!);
+      return h(
+        "p",
+        { "data-owner": "" },
+        `${settled.name} ${String(settled === holder)} ${String(settled.list[0] === holder)}`,
+      );
+    }
+    modules["/src/owner.tsx"] = { Owner };
+    const OwnerIsland = createIsland(Owner, "/src/owner.tsx", "Owner");
+    const holder: Holder = { name: "holder", list: [] };
+    holder.self = Promise.resolve(holder);
+    holder.list.push(holder);
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(OwnerIsland, { holder })),
+    );
+    // Sent once, and the server render reads the same object.
+    expect(markup.match(/type="f\/promise"/g)).toHaveLength(1);
+    expect(markup).toContain("holder true true");
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-owner]")!.textContent).toBe("holder true true"),
+    );
+    expect(errors()).toEqual([]);
+  });
+
+  it("let a stream prop's chunks refer to the object holding the stream", async () => {
+    const errors = spyErrors();
+    type Feed = { name: string; chunks?: ReadableStream<{ feed: Feed; index: number }> };
+    const seen = new WeakMap<object, Promise<string>>();
+    // Reads every chunk while rendering, on the server and in the browser.
+    const readAll = (feed: Feed) => {
+      let read = seen.get(feed.chunks!);
+      if (!read) {
+        read = (async () => {
+          const parts: string[] = [];
+          const reader = feed.chunks!.getReader();
+          for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+            parts.push(`${chunk.value.index}:${String(chunk.value.feed === feed)}`);
+          }
+          return parts.join(" ");
+        })();
+        seen.set(feed.chunks!, read);
+      }
+      return read;
+    };
+    function Reader({ feed }: { feed: Feed }) {
+      return h("p", { "data-feed": "" }, use(readAll(feed)));
+    }
+    modules["/src/reader.tsx"] = { Reader };
+    const ReaderIsland = createIsland(Reader, "/src/reader.tsx", "Reader");
+    const feed: Feed = { name: "feed" };
+    let index = 0;
+    feed.chunks = new ReadableStream({
+      pull(controller) {
+        if (index === 3) return controller.close();
+        controller.enqueue({ feed, index: index++ });
+      },
+    });
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(ReaderIsland, { feed })),
+    );
+    expect(markup).toContain("0:true 1:true 2:true");
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-feed]")!.textContent).toBe("0:true 1:true 2:true"),
+    );
+    expect(errors()).toEqual([]);
+  });
+
+  it("render elements inside a map or set prop, with live client components, as React Server Components do", async () => {
+    const errors = spyErrors();
+    function Panels({ panels, marks }: { panels: Map<string, ReactNode>; marks: Set<ReactNode> }) {
+      return h("div", { "data-panels": "" }, panels.get("main"), ...marks);
+    }
+    modules["/src/panels.tsx"] = { Panels };
+    const PanelsIsland = createIsland(Panels, "/src/panels.tsx", "Panels");
+    const markup = await html(
+      h(PanelsIsland, {
+        panels: new Map([["main", h(CounterIsland, { start: 1, label: "panel" })]]),
+        marks: new Set([h("i", { key: "m" }, "marked")]),
+      }),
+    );
+    expect(markup).toContain("panel 1");
+    await mount(markup);
+    expect(document.querySelector('[data-panels] [data-counter="panel"]')!.textContent).toBe(
+      "panel 1",
+    );
+    expect(document.querySelector("[data-panels] i")!.textContent).toBe("marked");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="panel"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="panel"]')!.textContent).toBe("panel 2");
+    expect(errors()).toEqual([]);
+  });
+
+  it("give an island global symbols, errors, iterators, blobs and form data, as React Server Components do", async () => {
+    const errors = spyErrors();
+    // jsdom's Blob cannot read its bytes; servers and browsers have one that can.
+    vi.stubGlobal("Blob", NodeBlob);
+    type Props = {
+      symbol: symbol;
+      error: Error;
+      items: Iterable<ReactNode>;
+      blob: Blob;
+      form: FormData;
+    };
+    function Kinds({ symbol, error, items, blob, form }: Props) {
+      return h(
+        "p",
+        { "data-kinds": "" },
+        String(symbol === Symbol.for("islx.prop")),
+        " ",
+        String(error instanceof Error && !error.message.includes("hunter2")),
+        " ",
+        ...items,
+        " ",
+        `${blob.size} ${String(blob instanceof Blob)}`,
+        " ",
+        String(form.get("name")),
+      );
+    }
+    modules["/src/kinds.tsx"] = { Kinds };
+    const KindsIsland = createIsland(Kinds, "/src/kinds.tsx", "Kinds");
+    const form = new FormData();
+    form.append("name", "kinfe");
+    const markup = await html(
+      h(
+        Suspense,
+        { fallback: null },
+        h(KindsIsland, {
+          symbol: Symbol.for("islx.prop"),
+          error: new Error("database password is hunter2"),
+          items: (function* () {
+            yield "a";
+            yield h("b", { key: "b" }, "b");
+          })(),
+          blob: new Blob(["blob"]),
+          form,
+        }),
+      ),
+    );
+    expect(markup).not.toContain("hunter2");
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-kinds]")!.textContent).toBe("true true ab 4 true kinfe"),
+    );
     expect(errors()).toEqual([]);
   });
 
@@ -1187,6 +1391,98 @@ describe("actions in islands", () => {
     release();
     expect(await result.total).toBe(3);
     expect(await result.ticks.next()).toEqual({ value: 1, done: false });
+  });
+
+  it("keep a result's cycles through promises and to itself while its elements render", async () => {
+    type Holder = {
+      name: string;
+      self?: Holder;
+      later?: Promise<Holder>;
+      note?: ReactNode;
+      chunks?: ReadableStream<{ holder: Holder }>;
+    };
+    const hold = async () => {
+      const holder: Holder = { name: "holder", note: h("em", null, "noted") };
+      holder.self = holder;
+      holder.later = Promise.resolve(holder);
+      let sent = false;
+      holder.chunks = new ReadableStream({
+        pull(controller) {
+          if (sent) return controller.close();
+          sent = true;
+          controller.enqueue({ holder });
+        },
+      });
+      return holder;
+    };
+    registerServerReference(hold, "island-hold-cycles");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const holder = (await createServerReference("island-hold-cycles")()) as Holder;
+    expect(holder.self).toBe(holder);
+    expect(await holder.later).toBe(holder);
+    const reader = holder.chunks!.getReader();
+    expect((await reader.read()).value!.holder).toBe(holder);
+  });
+
+  it("render elements and promises inside a map or set an action returns, as React Server Components do", async () => {
+    const make = async () => ({
+      byName: new Map<string, unknown>([
+        ["now", h("em", null, "in a map")],
+        ["later", Promise.resolve(h("b", null, "later"))],
+      ]),
+      marks: new Set<unknown>([h("i", null, "in a set")]),
+    });
+    registerServerReference(make, "island-map-set-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-map-set-result")()) as {
+      byName: Map<string, unknown>;
+      marks: Set<unknown>;
+    };
+    expect([...result.byName.keys()]).toEqual(["now", "later"]);
+    expect(isValidElement(result.byName.get("now"))).toBe(true);
+    expect(isValidElement(await result.byName.get("later"))).toBe(true);
+    expect([...result.marks].map((mark) => isValidElement(mark))).toEqual([true]);
+  });
+
+  it("render the elements inside an iterator an action returns", async () => {
+    const make = async () => ({
+      items: (function* () {
+        yield 1;
+        yield h("em", null, "two");
+      })(),
+    });
+    registerServerReference(make, "island-iterator-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-iterator-result")()) as {
+      items: Iterator<unknown>;
+    };
+    const items = [...(result.items as unknown as Iterable<unknown>)];
+    expect(items[0]).toBe(1);
+    expect(isValidElement(items[1])).toBe(true);
   });
 
   it("render the elements an action returns inside the framework's run, once", async () => {

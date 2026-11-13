@@ -12,6 +12,15 @@ interface Deferred {
   reject(reason: unknown): void;
 }
 
+interface Entry extends Deferred {
+  /** The containers above the promise, which its settled value continues. */
+  ancestors?: readonly unknown[];
+  /** Whether it is a stream's step, whose next step continues the stream's ancestors. */
+  step?: boolean;
+  /** The stream a `W` tag naming it stands for, made once. */
+  stream?: unknown;
+}
+
 function defer(): Deferred {
   let resolve!: (value: unknown) => void;
   let reject!: (reason: unknown) => void;
@@ -27,8 +36,13 @@ function defer(): Deferred {
 export interface StreamedResult {
   /** The first line: `{"result":…}`, or a redirect. */
   payload: { result?: unknown; redirect?: string };
-  /** The promise or stream a `T` or `W` tag in the result names, or undefined for other tags. */
-  reference(object: Record<string, unknown>): unknown;
+  /**
+   * The promise or stream a `T` or `W` tag in the result names, or undefined for other tags.
+   * `ancestors` are the containers above it, as `decode` passes them.
+   */
+  reference(object: Record<string, unknown>, ancestors: () => readonly unknown[]): unknown;
+  /** Starts settling promises; call it once the result is decoded, as their values continue it. */
+  start(): void;
 }
 
 /**
@@ -62,9 +76,9 @@ export async function readStreamedResult(
     }
   };
 
-  const entries = new Map<string, Deferred>();
+  const entries = new Map<string, Entry>();
   let ended: Error | null = null;
-  const entry = (name: string): Deferred => {
+  const entry = (name: string): Entry => {
     let found = entries.get(name);
     if (!found) {
       found = defer();
@@ -73,30 +87,54 @@ export async function readStreamedResult(
     }
     return found;
   };
-  const reference = (object: Record<string, unknown>): unknown => {
+  // The tags that name a step's next step, which continue the stream's ancestors.
+  const nextSteps = new WeakMap<object, readonly unknown[]>();
+  const reference = (
+    object: Record<string, unknown>,
+    ancestors: () => readonly unknown[],
+  ): unknown => {
     const tag = getTag(object);
     const name = object[TAG_VALUE];
     if (typeof name !== "string") return undefined;
-    if (tag === PROMISE_TAG) return entry(name).promise;
-    if (tag === STREAM_TAG) {
+    if (tag !== PROMISE_TAG && tag !== STREAM_TAG) return undefined;
+    const found = entry(name);
+    // The first tag naming a promise places it, as the server names it where it first meets it.
+    if (!found.ancestors) {
+      const next = nextSteps.get(object);
+      found.ancestors = next ?? ancestors();
+      found.step = tag === STREAM_TAG || !!next;
+    }
+    if (tag === PROMISE_TAG) return found.promise;
+    if (found.stream === undefined) {
       const kind = object[STREAM_KIND_FIELD];
       if (kind !== "r" && kind !== "i" && kind !== "t")
         throw new TypeError("malformed islx stream");
-      return fromStreamSteps(entry(name).promise as Promise<StreamStep>, kind);
+      found.stream = fromStreamSteps(found.promise as Promise<StreamStep>, kind);
     }
-    return undefined;
+    return found.stream;
   };
-  const decodeSettled = async (value: unknown) => {
+  const decodeSettled = async (value: unknown, settling: Entry) => {
     const elements = await reviveElements(value);
+    if (settling.step) {
+      const next = (value as { v?: { n?: unknown } } | null)?.v?.n;
+      if (next && typeof next === "object") nextSteps.set(next, settling.ancestors!);
+    }
     return decode(value, {
-      decodeReference: (object) =>
-        elements.get(object) ?? reference(object) ?? decodeReference(object),
+      ancestors: settling.ancestors,
+      decodeReference: (object, ancestors) =>
+        elements.get(object) ?? reference(object, ancestors) ?? decodeReference(object),
     });
   };
 
   const first = await nextLine();
   const payload = JSON.parse(first ?? "{}") as StreamedResult["payload"];
-  void (async () => {
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    void settle();
+  };
+  const settle = async () => {
     try {
       for (let line = await nextLine(); line !== null; line = await nextLine()) {
         if (!line) continue;
@@ -108,8 +146,10 @@ export async function readStreamedResult(
           continue;
         }
         try {
+          // A promise no decoded value names cannot be placed: the result failed to decode.
+          if (!settling.ancestors) throw new TypeError("malformed islx result line");
           // In order: a stream's next step settles after the chunk before it.
-          settling.resolve(((await decodeSettled(message.v)) as { v: unknown }).v);
+          settling.resolve(((await decodeSettled(message.v, settling)) as { v: unknown }).v);
         } catch (error) {
           settling.reject(error);
         }
@@ -120,6 +160,6 @@ export async function readStreamedResult(
     }
     // Whatever is still waiting never settles now. A settled promise ignores this.
     for (const waiting of entries.values()) waiting.reject(ended);
-  })();
-  return { payload, reference };
+  };
+  return { payload, reference, start };
 }

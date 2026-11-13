@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.0.21
+
+Server actions take and return what React Server Components let them.
+
+- A value the codec cannot carry (an element, a plain function, a class instance, a local symbol)
+  can be an action argument. The action gets a stand-in it can only return, and the browser gets
+  the same object back, as a temporary reference. Reading or changing the stand-in throws.
+- An action bound with `.bind` in the browser can be sent to another action, and an action the
+  browser sent can be bound again on the server and returned.
+- An action can return an inline action that captured values. Before, the call answered 500.
+
+## 0.0.20
+
+- An island whose props hold server output with client components inside keeps its state when the
+  page refreshes after an action. Before, it remounted ("the server tree of slot … was not
+  prepared").
+
+## 0.0.19
+
+More of what React Server Components send travels, in props and action results.
+
+- A `Map` or `Set` can hold elements and promises: elements render with their client components
+  live. Before, an island failed its render and an action answered 500.
+- Global symbols (`Symbol.for`), errors, generators and other self-iterators, `Blob`s and
+  `FormData` travel. An error arrives without its message, as in a React production build, and an
+  island's server render sees the same error. A `File` arrives as a `Blob`.
+- Wire: new tags `y`, `Z`, `i`, `b` and `f` (see SPEC).
+
+## 0.0.18
+
+- With the React renderer installed (as in Farm), a server action that returns an object whose
+  promise settles to that object answers, and the promise gives back the same object. Before, the
+  response never ended. A result that holds itself and an element or a promise keeps its cycle
+  too: before, `result.self` was a separate copy.
+
+## 0.0.17
+
+A promise that settles to the object holding it works, as under React Server Components.
+
+- A server action can return an object whose promise settles to that object: the promise
+  settles to the same object in the browser. Before, the server sent it again without end and its
+  event loop stalled. A stream's chunks can refer to the object holding the stream too.
+- A client component can receive such a prop, and its promise (or stream chunk) gives back the
+  same object, on the server render and in the browser. Before, React's server render overflowed
+  its stack.
+- A promise or stream that appears twice in a result, or twice in one island's props, is one
+  promise or stream in the browser.
+
 ## 0.0.16
 
 Elements that arrive later render, as under React Server Components.

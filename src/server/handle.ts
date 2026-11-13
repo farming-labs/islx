@@ -23,14 +23,17 @@ import {
   SLOT_TAG,
   TAG,
   TAG_VALUE,
+  TEMPORARY_TAG,
   attachmentField,
   readPostedAction,
   stripRuntimeFields,
 } from "../protocol/wire";
-import { decodeActionReference, resolveAction, type ResolvedAction } from "./actions";
+import { decodeActionReference, prepareSeals, resolveAction, type ResolvedAction } from "./actions";
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { createResultEncoder } from "./result-stream";
+import { prepareBlobs } from "./blobs";
+import { createTemporaryReferences } from "./temporary";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
 
 const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
@@ -129,10 +132,18 @@ function seeOther(location: string): Response {
 
 const STALE = { [ACTION_STALE_HEADER]: "1" };
 
-/** A reference from the browser: only actions, and only ids this server registered. */
-function decodeArgumentReference(object: Record<string, unknown>): unknown {
+/**
+ * A reference from the browser: an action this server registered, or a value the call sent that
+ * the action can only return (a temporary reference).
+ */
+function decodeArgumentReference(
+  object: Record<string, unknown>,
+  temporaries: ReturnType<typeof createTemporaryReferences>,
+  decodeBound: (value: unknown) => unknown,
+): unknown {
   if (object[TAG] === REFERENCE_TAG || object[TAG] === SLOT_TAG) return undefined;
-  return decodeActionReference(object);
+  if (object[TAG] === TEMPORARY_TAG) return temporaries.decode(object[TAG_VALUE]);
+  return decodeActionReference(object, decodeBound);
 }
 
 function looksLikeActionForm(head: Uint8Array): boolean {
@@ -192,6 +203,13 @@ export async function handleAction(
     }
     let args: unknown[];
     let token: string | undefined;
+    const temporaries = createTemporaryReferences();
+    // The arguments an action argument was bound to in the browser decode like the call's own.
+    let decodeReference = (object: Record<string, unknown>): unknown =>
+      decodeArgumentReference(object, temporaries, decodeBound);
+    const decodeBound = (value: unknown) => decode(value, { decodeReference });
+    const decodeArgument = (object: Record<string, unknown>) =>
+      decodeArgumentReference(object, temporaries, decodeBound);
     try {
       const form = contentType.startsWith("multipart/form-data")
         ? await parseForm(request, body)
@@ -208,7 +226,7 @@ export async function handleAction(
         const payload = JSON.parse(call as string) as { a?: unknown; b?: unknown };
         if (!payload || typeof payload !== "object" || Array.isArray(payload))
           throw new TypeError();
-        const decodeReference = (object: Record<string, unknown>) => {
+        decodeReference = (object: Record<string, unknown>) => {
           const index = object[TAG_VALUE];
           if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return undefined;
           if (object[TAG] === BLOB_TAG) {
@@ -223,7 +241,7 @@ export async function handleAction(
             }
             return data;
           }
-          return decodeArgumentReference(object);
+          return decodeArgument(object);
         };
         const decoded = decode(payload.a ?? [], { decodeReference });
         if (!Array.isArray(decoded)) throw new TypeError("arguments must be an array");
@@ -237,7 +255,7 @@ export async function handleAction(
         };
         if (!payload || typeof payload !== "object" || Array.isArray(payload))
           throw new TypeError();
-        const decoded = decode(payload.a ?? [], { decodeReference: decodeArgumentReference });
+        const decoded = decode(payload.a ?? [], { decodeReference: decodeArgument });
         if (!Array.isArray(decoded)) throw new TypeError("arguments must be an array");
         if (payload.b !== undefined && typeof payload.b !== "string") throw new TypeError();
         args = decoded;
@@ -263,9 +281,11 @@ export async function handleAction(
     const results = createResultEncoder((value) =>
       isRenderedElements(value)
         ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
-        : undefined,
+        : temporaries.encode(value),
     );
     try {
+      await prepareBlobs(ran.result);
+      await prepareSeals(ran.result);
       const result = results.encode(ran.result);
       if (!results.streams) return json({ result });
       const report =

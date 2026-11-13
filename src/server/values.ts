@@ -3,7 +3,7 @@
  * hash of their JSON, and which of those a response leaves out because the browser already holds
  * them. The browser side is `@farm.js/islx/client` (`getValueStore`).
  */
-import { encodeLeaf, needsObjectTag } from "../protocol/codec";
+import { encodeLeaf, needsObjectTag, readIterator } from "../protocol/codec";
 import {
   CYCLE_TAG,
   MAX_HELD_VALUES,
@@ -52,7 +52,12 @@ export interface AddressOptions {
    * Encodes what plain JSON cannot hold: a function (an action), an element (a slot). Return
    * undefined to fall back to the codec, which throws for functions.
    */
-  encodeSpecial?: (value: unknown) => unknown;
+  encodeSpecial?: (value: unknown, ancestors: () => readonly object[]) => unknown;
+  /**
+   * The objects, arrays, maps and sets above the props, outermost first, when they continue
+   * another value (a promise's settled value): a cycle reference inside can name them.
+   */
+  ancestors?: readonly object[];
   /**
    * The input is JSON already, with its own tags (a server tree's payload): no type is tagged and
    * no object is wrapped, values are only addressed.
@@ -68,7 +73,7 @@ export interface AddressOptions {
  */
 export function addressValues(
   props: Record<string, unknown>,
-  { minLength = VALUE_MIN_LENGTH, encodeSpecial, encoded = false }: AddressOptions = {},
+  { minLength = VALUE_MIN_LENGTH, encodeSpecial, ancestors, encoded = false }: AddressOptions = {},
 ): AddressedProps {
   const values = new Map<string, AddressedValue>();
   const reference = (json: string, children: string[], parent: string[]) => {
@@ -80,13 +85,15 @@ export function addressValues(
   // The objects, arrays, maps and sets above the value being encoded, by depth: a value met again
   // while inside itself travels as the number of levels up to it (`CYCLE_TAG`), as Flight sends it.
   const depths = new Map<object, number>();
+  for (const ancestor of ancestors ?? []) depths.set(ancestor, depths.size);
+  const above = () => Array.from(depths.keys());
   // Returns the value's JSON with large inner values replaced, and the length of its full JSON:
   // a value is addressed by its full size, so a tree whose parts are all addressed still gets one
   // key of its own.
   // `inner` counts levels that are the encoder's own arrays (a map's entries and their pairs), not
   // the app's: they are not counted as levels.
   const encode = (value: unknown, parent: string[], inner = 0): [json: string, length: number] => {
-    const special = encoded ? undefined : encodeSpecial?.(value);
+    const special = encoded ? undefined : encodeSpecial?.(value, above);
     if (special !== undefined) {
       const json = JSON.stringify(special);
       return [json, json.length];
@@ -104,6 +111,12 @@ export function addressValues(
         typeof value === "string" && json.length >= minLength ? reference(json, [], parent) : json,
         json.length,
       ];
+    }
+    const entries = encoded ? undefined : readIterator(value);
+    if (entries) {
+      // The entries array is the encoder's own, not a level of the app's.
+      const [json, length] = encode(entries, parent, 1);
+      return [`{"$":"i","v":${json}}`, length + 13];
     }
     const depth = inner > 0 ? undefined : depths.get(value);
     if (depth !== undefined) {
