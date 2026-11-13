@@ -36,6 +36,7 @@ Anything that writes and reads it, in any language or framework, is a islx imple
 | `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree. |
 | `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree. |
 | `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
+| `<template name>` | After a client component in a server tree: the `<f-html>` parts its props carry that it did not render when the server rendered it (a closed folder's icon). `name` is its first part's. The browser reads a part from here when the component renders it. |
 | `<script type="f/promise" name>` | The outcome of a promise an island received, written when it settles: `{"v":value}`, or `{"e":1}` for a rejection (the reason stays on the server). `name` is the promise's name. It may land anywhere after the island, and stream in after the island hydrated. |
 
 A value script's, props script's and promise script's JSON escapes `<`, U+2028 and U+2029.
