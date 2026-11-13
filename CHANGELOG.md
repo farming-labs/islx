@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.22
+
+- A client component can receive server HTML in a prop it does not render on the server, such as a
+  closed folder's icon. That HTML now follows the component in a `<template name>`, so it hydrates
+  when the component renders it instead of rendering empty.
+
 ## 0.0.21
 
 Server actions take and return what React Server Components let them.
