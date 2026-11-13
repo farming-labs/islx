@@ -69,6 +69,8 @@ interface RootRecord {
   /** The props as the server sent them, to find the same island in a later render. */
   wire: string;
   serverHTML: string;
+  /** The latest carry-over still waiting for server trees: an older one does not render. */
+  carry?: symbol;
   restore(error: unknown): void;
   dispose(): void;
 }
@@ -121,7 +123,12 @@ let slotsRevived = 0;
  * A slot's server HTML: inside the island where it placed the slot, or in the template after its
  * props for a slot it had not placed.
  */
+// The slots of an island carried over a refresh, found before it left the page it came in.
+const capturedSlots = new WeakMap<Element, Map<string, Element | null>>();
+
 function findSlot(container: Element, name: string): Element | null {
+  const captured = capturedSlots.get(container);
+  if (captured?.has(name)) return captured.get(name)!;
   for (const slot of container.querySelectorAll(SLOT_ELEMENT)) {
     if (slot.getAttribute("name") === name) return slot;
   }
@@ -139,6 +146,20 @@ function findSlot(container: Element, name: string): Element | null {
 
 /** Each island's slots that carry server trees, rebuilt before the island hydrates. */
 const preparedSlots = new WeakMap<Element, Map<string, React.ReactNode>>();
+
+/** The names of every slot in `value`. */
+function collectSlots(value: unknown, names: Set<string>, seen = new Set<object>()): void {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  const object = value as Record<string, unknown>;
+  if (object[TAG] === SLOT_TAG && typeof object[TAG_VALUE] === "string") {
+    names.add(object[TAG_VALUE]);
+    return;
+  }
+  for (const entry of Array.isArray(value) ? value : Object.values(object)) {
+    collectSlots(entry, names, seen);
+  }
+}
 
 /** The names of the slots in `value` that carry server trees. */
 function collectTreeSlots(value: unknown, names: Set<string>, seen = new Set<object>()): void {
@@ -740,8 +761,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
     preparedSlots.set(container, trees);
   }
 
-  /** An island's props, with values, slots and actions revived. */
-  function readProps(container: Element, id: string): Record<string, unknown> {
+  /** An island's props as sent, with values resolved; `tagged` when anything needs reviving. */
+  function parseProps(container: Element, id: string): { parsed: unknown; tagged: boolean } {
     const script = findPropsScript(container, id);
     if (!script) throw new Error(`props ${id} were not found`);
     const text = script.textContent || "{}";
@@ -749,12 +770,18 @@ export function createHydrationRuntime(options: HydrationOptions) {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
       throw new Error("props must be an object");
     // No tag anywhere: plain JSON, nothing to resolve or revive.
-    if (!text.includes(`"${TAG}"`)) return parsed as Record<string, unknown>;
+    if (!text.includes(`"${TAG}"`)) return { parsed, tagged: false };
     if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);
     }
-    return revive(parsed, container, values) as Record<string, unknown>;
+    return { parsed, tagged: true };
+  }
+
+  /** An island's props, with values, slots and actions revived. */
+  function readProps(container: Element, id: string): Record<string, unknown> {
+    const { parsed, tagged } = parseProps(container, id);
+    return (tagged ? revive(parsed, container, values) : parsed) as Record<string, unknown>;
   }
 
   const topLevel = (scope: ParentNode) =>
@@ -966,17 +993,45 @@ export function createHydrationRuntime(options: HydrationOptions) {
       const previous = pairs.get(container);
       const record = previous && roots.get(previous);
       if (!previous || !record || !id) continue;
-      try {
-        const props = readProps(container, id);
+      const failed = (error: unknown) =>
+        report(`Could not keep ${keyOf(container)} across the refresh.`, error);
+      const show = (props: Record<string, unknown>) => {
         record.root.render(
           element(previous, record.Component, props, record.restore, record.position),
         );
         record.props = props;
         record.wire = wire;
+      };
+      try {
+        const { parsed, tagged } = parseProps(container, id);
+        const trees = new Set<string>();
+        if (tagged) collectTreeSlots(parsed, trees);
+        if (trees.size === 0) {
+          record.carry = undefined;
+          show((tagged ? revive(parsed, container, values) : parsed) as Record<string, unknown>);
+          container.replaceWith(previous);
+          carried++;
+          continue;
+        }
+        // Server trees in the props rebuild first (their client modules load): the live island
+        // keeps its place now and takes its new props once they are ready. Its slots are found
+        // before it leaves the page it came in.
+        const names = new Set<string>();
+        collectSlots(parsed, names);
+        capturedSlots.set(
+          container,
+          new Map(Array.from(names, (name) => [name, findSlot(container, name)])),
+        );
+        const turn = Symbol("carry");
+        record.carry = turn;
         container.replaceWith(previous);
         carried++;
+        prepareValueSlots!(container, trees).then(() => {
+          if (record.carry !== turn || roots.get(previous) !== record) return;
+          show(revive(parsed, container, values) as Record<string, unknown>);
+        }, failed);
       } catch (error) {
-        report(`Could not keep ${keyOf(container)} across the refresh.`, error);
+        failed(error);
       }
     }
     return carried;
