@@ -373,7 +373,7 @@ describe("server tree pages", () => {
     expect(container.querySelector("#island")!.textContent).toBe("1");
   });
 
-  it("keeps a client component whose props do not serialize as server HTML", async () => {
+  it("refuses a client component whose props cannot be sent, as React Server Components do", async () => {
     async function Page() {
       return (
         <>
@@ -382,13 +382,40 @@ describe("server tree pages", () => {
         </>
       );
     }
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(renderPage(<Page />)).rejects.toThrow(
+      "Callback (/src/callback.tsx) cannot get its props in the browser",
+    );
+  });
+
+  it("sends a client component a prop that refers to itself, as React Server Components do", async () => {
+    type Node = { name: string; self?: Node };
+    function CycleSource({ node }: { node: Node }) {
+      const [clicks, setClicks] = useState(0);
+      return (
+        <button id="cycle" onClick={() => setClicks(clicks + 1)}>
+          {`${node.name} ${node.self === node} ${clicks}`}
+        </button>
+      );
+    }
+    modules["/src/cycle.tsx"] = { Cycle: CycleSource };
+    const Cycle = createIsland(CycleSource, "/src/cycle.tsx", "Cycle", "load");
+    const node: Node = { name: "root" };
+    node.self = node;
+    async function Page() {
+      return (
+        <>
+          <Cycle node={node} />
+          <PageButton label="tree" />
+        </>
+      );
+    }
     const html = await renderPage(<Page />);
-    expect(html).toMatch(/<f-html[^>]*><button id="callback"/);
+    expect(html).toContain('<f-island src="/src/cycle.tsx"');
     const { container, errors } = await hydratePage(html);
     expect(errors).toEqual([]);
-    await click(container, "#header");
-    expect(container.querySelector("#page")!.textContent).toBe("tree:open");
+    await click(container, "#cycle");
+    expect(container.querySelector("#cycle")!.textContent).toBe("root true 1");
   });
 
   it("wraps the nearest element outside a table when a cell cannot be represented", async () => {

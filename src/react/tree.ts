@@ -9,8 +9,9 @@
  * layout's root, so the page's client components hydrate as the layout's descendants.
  *
  * Anything the resolver cannot represent (a server component that calls hooks, a class component,
- * a client component whose props do not serialize, an unknown element type) renders as server
- * HTML inside `<f-html>`, whose own client components hydrate as islands.
+ * an unknown element type) renders as server HTML inside `<f-html>`, whose own client components
+ * hydrate as islands. A client component whose props cannot be sent fails the render there, as
+ * under React Server Components.
  */
 import * as React from "react";
 import { NOT_A_VALUE, decodeTagged, encodeLeaf } from "../protocol/codec";
@@ -1221,6 +1222,40 @@ export interface SlotTree {
   element: React.ReactElement;
   /** True when the browser rebuilds the slot from its payload; false for plain server HTML. */
   rebuild: boolean;
+  /** Plain server HTML that is one host element: that element, which a clone gives its props. */
+  host?: SlotHost;
+}
+
+/** @internal A slot's one host element: its tag and its props, other than its children. */
+export interface SlotHost {
+  element: React.ReactElement<Record<string, unknown>>;
+  tag: string;
+  props: Record<string, unknown>;
+}
+
+const isPrimitive = (value: unknown): boolean =>
+  value === null || ["string", "number", "boolean"].includes(typeof value);
+
+/** The host element `node` is, when its props travel as JSON: strings, numbers, a style. */
+function getSlotHost(node: React.ReactNode): SlotHost | undefined {
+  if (!React.isValidElement(node) || typeof node.type !== "string") return undefined;
+  const props: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node.props as Record<string, unknown>)) {
+    if (key === "children" || value === undefined) continue;
+    if (key === "dangerouslySetInnerHTML" || key === "ref") return undefined;
+    if (key === "style") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+      if (!Object.values(value).every(isPrimitive)) return undefined;
+    } else if (!isPrimitive(value)) {
+      return undefined;
+    }
+    props[key] = value;
+  }
+  return {
+    element: node as React.ReactElement<Record<string, unknown>>,
+    tag: node.type,
+    props,
+  };
 }
 
 /**
@@ -1302,7 +1337,12 @@ export async function renderSlotTree(
   };
   const rendered = createTreeValue(tree, resolver) as React.ReactNode;
   if (!needsRebuild(tree)) {
-    return { element: React.createElement(React.Fragment, null, rendered), rebuild: false };
+    const host = getSlotHost(rendered);
+    return {
+      element: React.createElement(React.Fragment, null, rendered),
+      rebuild: false,
+      ...(host ? { host } : {}),
+    };
   }
   const payload = encode({ v: 1, t: tree });
   return {

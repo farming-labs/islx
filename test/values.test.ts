@@ -93,6 +93,22 @@ describe("values sent once", () => {
     expect(value.id).toBe(1n);
   });
 
+  it("sends a value that contains itself as the number of levels up to it", () => {
+    const node: Record<string, unknown> = { name: "root" };
+    node.self = node;
+    node.children = [{ parent: node }];
+    const map = new Map<string, unknown>([["me", null]]);
+    map.set("me", map);
+    const set = new Set<unknown>();
+    set.add([set]);
+    const shared = { a: 1 };
+    expect(addressValues({ node, map, set, pair: [shared, shared] }).json).toBe(
+      '{"node":{"name":"root","self":{"$":"C","v":1},"children":[{"parent":{"$":"C","v":3}}]},' +
+        '"map":{"$":"M","v":[["me",{"$":"C","v":1}]]},"set":{"$":"S","v":[[{"$":"C","v":2}]]},' +
+        '"pair":[{"a":1},{"a":1}]}',
+    );
+  });
+
   it("wraps app data that looks like a tag", () => {
     const lookalike = { $: "r", v: "04jiw29097x8ki" };
     const { value } = read(
@@ -137,6 +153,30 @@ describe("held values", () => {
     expect(header.split(",")).toEqual(expect.arrayContaining(addressed.roots));
     store.clear();
     expect(valueHeaders()).toEqual({});
+  });
+
+  it("keeps the values a page has not used yet when the store grows past its limit", () => {
+    const store = createValueStore();
+    const scripts = (from: number, count: number) =>
+      Array.from({ length: count }, (_, index) => {
+        const value = `value ${from + index}`;
+        return `<script type="f/value" name="${hashValue(value)}">${JSON.stringify(value)}</script>`;
+      }).join("");
+    const ingest = (html: string) =>
+      store.ingest(Object.assign(document.createElement("div"), { innerHTML: html }));
+    // A page whose islands wait: their values are stored, not used yet.
+    ingest(scripts(0, 10));
+    // Many values that islands used, from later navigations.
+    ingest(scripts(10, 1100));
+    for (let index = 10; index < 1110; index++) {
+      store.resolve({ $: "r", v: hashValue(`value ${index}`) });
+    }
+    const header = store.heldHeader()!;
+    // The waiting islands still find theirs, and the header still names what the browser holds.
+    expect(store.resolve({ $: "r", v: hashValue("value 0") })).toBe("value 0");
+    expect(header.split(",")).toHaveLength(128);
+    for (const key of header.split(","))
+      expect(() => store.resolve({ $: "r", v: key })).not.toThrow();
   });
 
   it("refuses a value that refers to itself", () => {

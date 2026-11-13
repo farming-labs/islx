@@ -22,51 +22,60 @@ Anything that writes and reads it, in any language or framework, is a islx imple
   …the component's server HTML…
   <f-slot name="_R_5_s0">…server output passed as children…</f-slot>
 </f-island>
-<script type="f/value" name="04jiw29097x8ki">[…a value sent once…]</script>
-<script type="f/props" for="_R_b_">{"headings":[…],"tree":{"$":"r","v":"04jiw29097x8ki"}}</script>
+<script type="f/value" name="04jiw29097x8ki">
+  […a value sent once…]
+</script>
+<script type="f/props" for="_R_b_">
+  {"headings":[…],"tree":{"$":"r","v":"04jiw29097x8ki"}}
+</script>
 ```
 
-| Name | Meaning |
-| --- | --- |
-| `<f-island>` | A client component's server HTML. `src` names the module the browser imports (its path from the app root; the runtime maps it to a URL), `export` the component's export name, `props` the id of its props script, `strategy` when it hydrates: `load`, `idle`, `visible` or `interaction`. A hydrated island gets a `hydrated` attribute. |
-| `<script type="f/props" for [ids]>` | An island's props, as JSON. `for` names the island's `props` id. `ids` is the `useId` React gave a probe the server renders first in the island, at index 0 of a two-child array whose second child is the component: its bits and length are the island's id position, which the browser rebuilds before it hydrates the component at index 1, so the component's `useId` calls match its HTML. Without it the browser hydrates with React's own ids. |
-| `<script type="f/value" name>` | A value sent once. `name` is its key. Written before the first island that uses it. |
-| `<f-slot name>` | Server output passed to an island as children (or any element prop). Plain HTML stays server HTML, and the island renders it in place. Output holding client components, Suspense boundaries, actions or `<f-html>` parts carries a server tree (`<script type="f/tree" name>` named after the slot, inside it), which the browser rebuilds inside the island's root: its client components are the island's descendants and read its context. |
-| `<template for>` | After an island's props: the `<f-slot>`s the island did not place when the server rendered it (a closed panel, a tab not shown yet). `for` names the island's `props` id. The browser reads a slot from here when the island places it. |
-| `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree. |
-| `<script type="f/chunk" name>` | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree. |
-| `<f-html name>` | Server HTML inside a server tree, named like a chunk. |
-| `<template name>` | After a client component in a server tree: the `<f-html>` parts its props carry that it did not render when the server rendered it (a closed folder's icon). `name` is its first part's. The browser reads a part from here when the component renders it. |
-| `<script type="f/promise" name>` | The outcome of a promise an island received, written when it settles: `{"v":value}`, or `{"e":1}` for a rejection (the reason stays on the server). `name` is the promise's name. It may land anywhere after the island, and stream in after the island hydrated. |
+| Name                                      | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<f-island>`                              | A client component's server HTML. `src` names the module the browser imports (its path from the app root; the runtime maps it to a URL), `export` the component's export name, `props` the id of its props script, `strategy` when it hydrates: `load`, `idle`, `visible` or `interaction`. A hydrated island gets a `hydrated` attribute.                                                                                                                                                                            |
+| `<script type="f/props" for [ids]>`       | An island's props, as JSON. `for` names the island's `props` id. `ids` is the `useId` React gave a probe the server renders first in the island, at index 0 of a two-child array whose second child is the component: its bits and length are the island's id position, which the browser rebuilds before it hydrates the component at index 1, so the component's `useId` calls match its HTML. Without it the browser hydrates with React's own ids.                                                                |
+| `<script type="f/value" name>`            | A value sent once. `name` is its key. Written before the first island that uses it.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `<f-slot name>`                           | Server output passed to an island as children (or any element prop). Plain HTML stays server HTML, and the island renders it in place. Output holding client components, Suspense boundaries, actions or `<f-html>` parts carries a server tree (`<script type="f/tree" name>` named after the slot, inside it), which the browser rebuilds inside the island's root: its client components are the island's descendants and read its context.                                                                        |
+| `<template for>`                          | After an island's props: the `<f-slot>`s the island did not place when the server rendered it (a closed panel, a tab not shown yet). `for` names the island's `props` id. The browser reads a slot from here when the island places it. A promise prop whose value holds elements writes them in one too, before its `f/promise` script; their slots are named `<island slot prefix>p<n>_<m>`. A stream prop does the same for each step that holds elements, with slots named `<island slot prefix>w<n>_<step>_<m>`. |
+| `<script type="f/tree" [name] [partial]>` | A server tree, so the browser can rebuild the page inside an existing root without its HTML. A page's tree has no `name`; a layout's carries its scope and sits at its `children` outlet, or after the layout when it has none. `partial` marks a navigation that sent only the tree.                                                                                                                                                                                                                                 |
+| `<script type="f/chunk" name>`            | A part of a server tree that streamed in after the tree (a resolved Suspense boundary). `name` is its number, after `scope:` in a layout's tree.                                                                                                                                                                                                                                                                                                                                                                      |
+| `<f-html name>`                           | Server HTML inside a server tree, named like a chunk.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `<template name>`                         | After a client component in a server tree: the `<f-html>` parts its props carry that it did not render when the server rendered it (a closed folder's icon). `name` is its first part's. The browser reads a part from here when the component renders it.                                                                                                                                                                                                                                                            |
+| `<script type="f/promise" name>`          | The outcome of a promise an island received, written when it settles: `{"v":value}`, or `{"e":1}` for a rejection (the reason stays on the server). `name` is the promise's name. It may land anywhere after the island, and stream in after the island hydrated.                                                                                                                                                                                                                                                     |
 
 A value script's, props script's and promise script's JSON escapes `<`, U+2028 and U+2029.
 
 ## JSON tags
 
 A tagged object is `{"$":tag}` or `{"$":tag,"v":data}`; an action may also carry `"b"`, and a slot
-`"t":1` when it carries a server tree. An object with any other keys is data.
+`"t":1` when it carries a server tree, or `"h":{"t":tag,"p":props}` when it is plain HTML of one
+host element. A client component that clones such a slot (`asChild`) gives its props to that element,
+whose own props are `p`. An object with any other keys is data.
 
-| Tag | Stands for | Data |
-| --- | --- | --- |
-| `r` | a value sent once | its key |
-| `s` | a slot | its name |
-| `a` | a server action | its id; `b`, when present, holds its sealed captured values |
-| `o` | app data with a `$` key | the object |
-| `u` | `undefined` | |
-| `n` | `NaN`, `Infinity`, `-Infinity`, `-0` | the name |
-| `B` | `BigInt` | decimal digits |
-| `D` | `Date` | ISO string, `null` for an invalid date |
-| `M` | `Map` | `[[key, value], …]`, both tagged |
-| `S` | `Set` | `[value, …]`, tagged |
-| `U` | `URL` | `href` |
-| `R` | `RegExp` | `[source, flags]` |
-| `Y` | bytes | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name |
-| `T` | a promise an island receives | its name; its outcome arrives in the `f/promise` script of that name |
-| `P` | a promise inside a server tree, resolved already | its value, tagged |
-| `p` | a Suspense boundary inside a server tree | |
-| `L` | a layout tree's outlet, where the page renders | `n`: the outlet's name, `children` for the page |
-| `F` | a `FormData` action argument | its index among the call's attachments |
-| `K` | a `Blob` or `File` action argument | its index among the call's attachments |
+| Tag | Stands for                                                                 | Data                                                                                                                                                                    |
+| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r` | a value sent once                                                          | its key                                                                                                                                                                 |
+| `s` | a slot                                                                     | its name                                                                                                                                                                |
+| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values                                                                                                             |
+| `x` | React elements a server action returned (results only)                     | `{"s":scope,"h":html}`: their server HTML, with the server tree named `scope` that the browser rebuilds them from                                                       |
+| `o` | app data with a `$` key                                                    | the object                                                                                                                                                              |
+| `u` | `undefined`                                                                |                                                                                                                                                                         |
+| `n` | `NaN`, `Infinity`, `-Infinity`, `-0`                                       | the name                                                                                                                                                                |
+| `B` | `BigInt`                                                                   | decimal digits                                                                                                                                                          |
+| `D` | `Date`                                                                     | ISO string, `null` for an invalid date                                                                                                                                  |
+| `M` | `Map`                                                                      | `[[key, value], …]`, both tagged                                                                                                                                        |
+| `S` | `Set`                                                                      | `[value, …]`, tagged                                                                                                                                                    |
+| `U` | `URL`                                                                      | `href`                                                                                                                                                                  |
+| `R` | `RegExp`                                                                   | `[source, flags]`                                                                                                                                                       |
+| `Y` | bytes                                                                      | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name                                                                                               |
+| `T` | a promise an island receives                                               | its name; its outcome arrives in the `f/promise` script of that name                                                                                                    |
+| `W` | a stream an island receives (`ReadableStream`, async iterable or iterator) | its first step's promise name, and `k`: `r`, `i` or `t`; each step is `{"v":chunk,"n":next promise}`, or `{"d":1}` at the end (with the iterator's return value as `v`) |
+| `C` | a value that contains itself                                               | how many levels up it is: 1 is the object, array, `Map` or `Set` holding it, and only those count                                                                       |
+| `P` | a promise inside a server tree, resolved already                           | its value, tagged                                                                                                                                                       |
+| `p` | a Suspense boundary inside a server tree                                   |                                                                                                                                                                         |
+| `L` | a layout tree's outlet, where the page renders                             | `n`: the outlet's name, `children` for the page                                                                                                                         |
+| `F` | a `FormData` action argument                                               | its index among the call's attachments                                                                                                                                  |
+| `K` | a `Blob` or `File` action argument                                         | its index among the call's attachments                                                                                                                                  |
 
 The browser resolves `r` first (from its value store), then decodes the rest. Inside `o`, only
 the object's properties are read; the object itself is never a tag. Unknown tags are errors.
@@ -94,11 +103,11 @@ must never enter a shared cache (CDN, ISR entry, PPR shell), and a cacheable res
 
 ## Navigations
 
-| Header | Meaning |
-| --- | --- |
-| `F-Values` | value keys the browser holds |
-| `F-Layouts` | the layouts on screen, as a JSON array of layout keys (pattern with params filled in) |
-| `F-Render: tree` | the browser can rebuild the page from its server tree; HTML may be left out |
+| Header               | Meaning                                                                                                                                                               |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `F-Values`           | value keys the browser holds                                                                                                                                          |
+| `F-Layouts`          | the layouts on screen, as a JSON array of layout keys (pattern with params filled in)                                                                                 |
+| `F-Render: tree`     | the browser can rebuild the page from its server tree; HTML may be left out                                                                                           |
 | `F-Render: document` | a navigation: the browser puts the whole page in place with DOM methods, so the server sends it in one piece (every Suspense boundary resolved, no streaming scripts) |
 
 Without a framework router, the browser runtime navigates itself: a same-site link click fetches
@@ -143,7 +152,7 @@ A single `FormData` argument is sent as `multipart/form-data` instead, with the 
 the `$F_BOUND` field. Arguments that hold `FormData` or files anywhere (as `useActionState`'s
 `(previousState, formData)`) are sent as multipart too: the JSON goes in the `$F_CALL` field,
 attachment `n` is `{"$":"F","v":n}` or `{"$":"K","v":n}` in it, a file travels as field `$F_n`
-and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`.
+and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server. Elements in a settled value travel as `x`, rendered when the value settles.
 Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
 registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
 page after each one (a redirect navigates instead).
@@ -153,11 +162,11 @@ page after each one (a redirect navigates instead).
 
 ```html
 <form action="" method="POST" enctype="multipart/form-data">
-  <input type="hidden" name="$F_REF_R_1_">
-  <input type="hidden" name="$F_R_1_:A" value="…action id…">
-  <input type="hidden" name="$F_R_1_:B" value="…sealed…">
+  <input type="hidden" name="$F_REF_R_1_" />
+  <input type="hidden" name="$F_R_1_:A" value="…action id…" />
+  <input type="hidden" name="$F_R_1_:B" value="…sealed…" />
   <button name="$F_REF_R_2_">Delete</button>
-  <input type="hidden" name="$F_R_2_:A" value="…another action…">
+  <input type="hidden" name="$F_R_2_:A" value="…another action…" />
   …
 </form>
 ```
@@ -216,15 +225,15 @@ invalid instead of stale; its values are stale now.
 
 islx is layered so each framework needs only a thin integration:
 
-| Layer | Package entry | Depends on |
-| --- | --- | --- |
-| Wire format and codec | `@farm.js/islx` | nothing (Web APIs) |
-| Server: values, sealing, action handling | `@farm.js/islx/server` | `@farm.js/islx` |
-| Browser: value store, hydration, navigation | `@farm.js/islx/client` | `@farm.js/islx` |
-| Renderer adapters | `@farm.js/islx/react` (then Preact, Vue, Svelte, Solid) | the renderer |
-| Compiler: `"use client"`, `"use server"`, inline actions | `@farm.js/islx/compiler` | a parser |
-| Bundler plugins | `@farm.js/islx/vite`, `@farm.js/islx/webpack`, `@farm.js/islx/rollup`, `@farm.js/islx/esbuild` | the compiler |
-| Frameworks | `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt`, … | the above |
+| Layer                                                    | Package entry                                                                                  | Depends on         |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------ |
+| Wire format and codec                                    | `@farm.js/islx`                                                                                | nothing (Web APIs) |
+| Server: values, sealing, action handling                 | `@farm.js/islx/server`                                                                         | `@farm.js/islx`    |
+| Browser: value store, hydration, navigation              | `@farm.js/islx/client`                                                                         | `@farm.js/islx`    |
+| Renderer adapters                                        | `@farm.js/islx/react` (then Preact, Vue, Svelte, Solid)                                        | the renderer       |
+| Compiler: `"use client"`, `"use server"`, inline actions | `@farm.js/islx/compiler`                                                                       | a parser           |
+| Bundler plugins                                          | `@farm.js/islx/vite`, `@farm.js/islx/webpack`, `@farm.js/islx/rollup`, `@farm.js/islx/esbuild` | the compiler       |
+| Frameworks                                               | `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt`, …                           | the above          |
 
 - **Request handling** is one function on Web `Request` and `Response`, so any server mounts it:
   a Next.js route handler or middleware, a Nitro event handler, Astro middleware, Hono, Express

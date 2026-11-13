@@ -2,11 +2,12 @@
  * Handling a posted server action: one function on a Web `Request`, so any server mounts it.
  * It returns `null` for a request that is not an action, which the app then handles as usual.
  *
- * Calls from JavaScript (`F-Action` header) answer JSON. Forms posted without JavaScript run the
+ * Calls from JavaScript (`F-Action` header) answer JSON, or lines of JSON when the result holds
+ * promises or streams, which stream in after it. Forms posted without JavaScript run the
  * action and answer `303 See Other` back to the page, or render the page with a
  * `useActionState` result when the app gives `renderFormState`.
  */
-import { decode, encode } from "../protocol/codec";
+import { decode } from "../protocol/codec";
 import {
   ACTION_HEADER,
   ACTION_KEY_FIELD,
@@ -14,9 +15,11 @@ import {
   BLOB_TAG,
   BOUND_FIELD,
   CALL_FIELD,
+  ELEMENT_TAG,
   FORM_DATA_TAG,
   FORM_REF_PREFIX,
   REFERENCE_TAG,
+  RESULT_STREAM_TYPE,
   SLOT_TAG,
   TAG,
   TAG_VALUE,
@@ -24,15 +27,43 @@ import {
   readPostedAction,
   stripRuntimeFields,
 } from "../protocol/wire";
-import {
-  decodeActionReference,
-  encodeActionReference,
-  resolveAction,
-  type ResolvedAction,
-} from "./actions";
+import { decodeActionReference, resolveAction, type ResolvedAction } from "./actions";
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
+import { createResultEncoder } from "./result-stream";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
+
+const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
+
+/** @internal Elements an action returned, rendered: their scope and server HTML (`ELEMENT_TAG`). */
+export class RenderedElements {
+  // A brand, not `instanceof`: the React adapter may load another copy of this module.
+  readonly [RENDERED_ELEMENTS] = true;
+  constructor(
+    readonly scope: string,
+    readonly html: string,
+  ) {}
+}
+
+function isRenderedElements(value: object): value is RenderedElements {
+  return (value as Record<symbol, unknown>)[RENDERED_ELEMENTS] === true;
+}
+
+const RESULT_RENDERER = Symbol.for("islx.server.result-renderer");
+
+/**
+ * @internal Renders the React elements in an action's result into `RenderedElements`.
+ * `@farm.js/islx/react/server` installs it; without it, a result with elements does not serialize.
+ */
+export function setActionResultRenderer(render: (value: unknown) => Promise<unknown>): void {
+  (globalThis as Record<symbol, unknown>)[RESULT_RENDERER] = render;
+}
+
+function getActionResultRenderer(): ((value: unknown) => Promise<unknown>) | undefined {
+  return (globalThis as Record<symbol, unknown>)[RESULT_RENDERER] as
+    | ((value: unknown) => Promise<unknown>)
+    | undefined;
+}
 
 /** React's form state: the result, the hook it belongs to, the action id, its bound count. */
 export type ReactFormState = [state: unknown, key: string, referenceId: string, boundCount: number];
@@ -124,9 +155,13 @@ export async function handleAction(
     resolved: Extract<ResolvedAction, { ok: true }>,
     id: string,
     args: unknown[],
+    /** Renders the elements in the result, for a call from JavaScript. */
+    render?: (result: unknown) => Promise<unknown>,
   ): Promise<{ result: unknown } | { error: unknown; outcome?: ActionErrorOutcome }> => {
     const info: ActionInfo = { request, ...describeAction(id, resolved.label) };
-    const invoke = () => resolved.run(args);
+    // Elements render inside the action's run, so server components in them read the request's
+    // context, and a framework that wraps the result wraps the rendered one, once.
+    const invoke = render ? async () => render(await resolved.run(args)) : () => resolved.run(args);
     try {
       return {
         result: await run(request, hooks.action ? () => hooks.action!(info, invoke) : invoke),
@@ -218,14 +253,33 @@ export async function handleAction(
         ? text(400, "Bad Request")
         : text(resolved.reason === "unknown" ? 404 : 409, "Stale Action", STALE);
     }
-    const ran = await execute(resolved, id, args);
+    const ran = await execute(resolved, id, args, getActionResultRenderer());
     if ("error" in ran) {
       if (ran.outcome?.redirect) return json({ redirect: ran.outcome.redirect });
       if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
       return text(500, "Server action failed");
     }
+    // Promises and streams in the result stream in after it, as React Server Components send them.
+    const results = createResultEncoder((value) =>
+      isRenderedElements(value)
+        ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
+        : undefined,
+    );
     try {
-      return json({ result: encode(ran.result, { encodeFunction: encodeActionReference }) });
+      const result = results.encode(ran.result);
+      if (!results.streams) return json({ result });
+      const report =
+        options.onError ??
+        ((reason: unknown) =>
+          console.error("[islx] A server action's streamed result failed:", reason));
+      return new Response(results.stream({ result }, report), {
+        status: 200,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": RESULT_STREAM_TYPE,
+          "x-content-type-options": "nosniff",
+        },
+      });
     } catch (error) {
       (
         options.onError ??

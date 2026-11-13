@@ -3,11 +3,14 @@
  * server code they need (values, action references); `renderToStream` renders a page.
  */
 import * as React from "react";
+import { fromStreamSteps, getStreamKind, toStreamSteps, type StreamStep } from "../protocol/stream";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
-import { encode } from "../protocol/codec";
+import { encode, plainObject } from "../protocol/codec";
 import {
   FORM_STATE_SCRIPT_TYPE,
   PROMISE_TAG,
+  STREAM_KIND_FIELD,
+  STREAM_TAG,
   RENDER_HEADER,
   TAG,
   TAG_VALUE,
@@ -16,14 +19,15 @@ import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { getBuildDefaults } from "../server/build";
-import type { ReactFormState } from "../server/handle";
+import { RenderedElements, setActionResultRenderer, type ReactFormState } from "../server/handle";
 import {
   addressValues,
   escapeScriptJson,
   parseHeldValues,
   selectValuesToSend,
 } from "../server/values";
-import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
+import { getContexts, getWireSteps, runtimeTagged, setIslandServerHook } from "./island";
+import { renderSlotTree } from "./tree";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
 // an earlier response never has two promises of one name. The random prefix is made at the first
@@ -52,6 +56,15 @@ setIslandServerHook({
     const addressed = addressValues(props, {
       encodeSpecial: (value) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        const kind = getStreamKind(value);
+        if (kind) {
+          // Sent as the promise of its first step, which settles as the stream is read. A stream
+          // the island split already has its steps.
+          const name = nextPromiseName();
+          const split = getWireSteps(value as object);
+          promises.push({ name, promise: split?.first ?? toStreamSteps(value as object, kind) });
+          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: split?.kind ?? kind };
+        }
         if (isThenable(value)) {
           const name = nextPromiseName();
           promises.push({ name, promise: value });
@@ -167,6 +180,76 @@ export async function renderToStream(
   if (request?.headers.has(RENDER_HEADER)) await stream.allReady;
   return stream;
 }
+
+let resultScopes = 0;
+
+/**
+ * Renders elements an action returned as a slot's server tree, so the browser rebuilds them with
+ * their client components live. Each result gets a scope of its own.
+ */
+async function renderResultElements(element: React.ReactElement): Promise<RenderedElements> {
+  const scope = `x${(resultScopes++).toString(36)}`;
+  const tree = await renderSlotTree(element, scope, null);
+  const { render } = getContexts();
+  const { renderToReadableStream } = await import("react-dom/server");
+  const stream = await renderToReadableStream(
+    React.createElement(
+      render.Provider,
+      { value: { held: null, sent: new Set<string>() } },
+      tree.element,
+    ),
+  );
+  await stream.allReady;
+  return new RenderedElements(scope, await new Response(stream).text());
+}
+
+/**
+ * The value with each React element in it rendered; anything else stays as it is. Boxed: an async
+ * function that returned a promise the action returned would wait for it, and the browser would
+ * get its value instead of the promise.
+ */
+async function renderInResult(value: unknown, ancestors: Set<object>): Promise<{ value: unknown }> {
+  if (React.isValidElement(value)) return { value: await renderResultElements(value) };
+  if (!value || typeof value !== "object" || ancestors.has(value)) return { value };
+  // What a promise or a stream settles to renders as it settles. The callbacks are attached here,
+  // inside the framework's `run`, so they render with the request's context too.
+  if (isThenable(value)) return { value: Promise.resolve(value).then(renderResult) };
+  const kind = getStreamKind(value);
+  if (kind) return { value: fromStreamSteps(renderSteps(toStreamSteps(value, kind)), kind) };
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const entries = await Promise.all(value.map((entry) => renderInResult(entry, ancestors)));
+      return entries.some((entry, index) => entry.value !== value[index])
+        ? { value: entries.map((entry) => entry.value) }
+        : { value };
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return { value };
+    const entries = await Promise.all(
+      Object.entries(value).map(
+        async ([key, entry]) =>
+          [key, entry, (await renderInResult(entry, ancestors)).value] as const,
+      ),
+    );
+    if (entries.every(([, entry, rendered]) => entry === rendered)) return { value };
+    return { value: plainObject(entries.map(([key, , rendered]) => [key, rendered])) };
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+const renderResult = async (value: unknown) => (await renderInResult(value, new Set())).value;
+
+/** Each step's chunk and return value, rendered. Steps are read as they arrive, as before. */
+function renderSteps(steps: PromiseLike<StreamStep>): Promise<StreamStep> {
+  return Promise.resolve(steps).then(async (step): Promise<StreamStep> => {
+    if (!("d" in step)) return { v: await renderResult(step.v), n: renderSteps(step.n) };
+    return step.v === undefined ? step : { d: 1, v: await renderResult(step.v) };
+  });
+}
+
+setActionResultRenderer(renderResult);
 
 /** Whether a response rendered for `request` leaves out values its browser holds. */
 export function isPersonalized(request: Request): boolean {

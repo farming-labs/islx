@@ -48,6 +48,13 @@ export const PROMISE_SCRIPT_TYPE = "f/promise";
 /** The script type of React's form state after a `useActionState` form post, for hydration. */
 export const FORM_STATE_SCRIPT_TYPE = "f/form-state";
 
+/**
+ * The `code` of the error a circular value threw while its props were encoded.
+ *
+ * @deprecated Circular values travel since 0.0.15 (`CYCLE_TAG`), so nothing throws this code.
+ */
+export const CIRCULAR_VALUE = "ISLX_CIRCULAR_VALUE";
+
 /** The reserved JSON key whose value is a tag. */
 export const TAG = "$";
 /** The key of a tagged object's data. */
@@ -57,6 +64,11 @@ export const TAG_BOUND = "b";
 
 /** `{"$":"r","v":key}`: a value sent once, by key. */
 export const REFERENCE_TAG = "r";
+/**
+ * `{"$":"C","v":levels}`: a value that contains itself. It stands for the object, array, `Map`
+ * or `Set` that many levels above it, counting only those (1 is the one holding it).
+ */
+export const CYCLE_TAG = "C";
 /** `{"$":"s","v":name}`: a slot. */
 export const SLOT_TAG = "s";
 /**
@@ -64,6 +76,18 @@ export const SLOT_TAG = "s";
  * after the slot) that the browser rebuilds inside the island, instead of keeping its HTML.
  */
 export const SLOT_TREE_FIELD = "t";
+/**
+ * On a slot reference: the slot's server output when it is one host element, as
+ * `{"t":tag,"p":props}`. A client component that clones the slot (`asChild`) gives its props to
+ * that element, as React Server Components do, instead of to the slot's wrapper.
+ */
+export const SLOT_HOST_FIELD = "h";
+/**
+ * `{"$":"x","v":{"s":scope,"h":html}}`: React elements an action returned. `h` is their server
+ * HTML, holding the server tree (`<script type="f/tree" name>` named `scope`) the browser rebuilds
+ * them from, so their client components are live, as React Server Components return them.
+ */
+export const ELEMENT_TAG = "x";
 /** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
 export const ACTION_TAG = "a";
 /**
@@ -71,6 +95,15 @@ export const ACTION_TAG = "a";
  * (Inside a server tree, `{"$":"P","v":value}` is a promise that resolved already.)
  */
 export const PROMISE_TAG = "T";
+/**
+ * `{"$":"W","v":name,"k":kind}`: a stream an island receives (`k`: `r` a `ReadableStream`, `i` an
+ * async iterable, `t` an async iterator). `name` is a promise (see `PROMISE_TAG`) of its first
+ * step: `{"v":chunk,"n":next}`, where `next` is the promise of the step after, or `{"d":1}` at the
+ * end, with the iterator's return value as `v`.
+ */
+export const STREAM_TAG = "W";
+/** On a stream: its kind. */
+export const STREAM_KIND_FIELD = "k";
 /** `{"$":"o","v":{…}}`: app data that has its own `$` key. */
 export const OBJECT_TAG = "o";
 /** `{"$":"F","v":n}`: a `FormData` argument, sent as fields of a multipart call. */
@@ -83,6 +116,14 @@ export const CALL_FIELD = "$F_CALL";
 export function attachmentField(index: number, key?: string): string {
   return key === undefined ? `$F_${index}` : `$F_${index}_${key}`;
 }
+
+/**
+ * The content type of an action's result that holds promises or streams: lines of JSON. The first
+ * is `{"result":…}`, with each promise as `{"$":"T","v":name}` (and each stream as `W`, on the
+ * promise of its first step); each later line settles one: `{"p":name,"v":{"v":value}}`, or
+ * `{"p":name,"e":1}` for a rejection, whose reason stays on the server.
+ */
+export const RESULT_STREAM_TYPE = "application/x-ndjson";
 
 /** Request header: the value keys the browser holds. */
 export const VALUES_HEADER = "F-Values";
@@ -160,7 +201,15 @@ export function getTag(value: unknown): string | undefined {
   if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
     return tag;
   }
-  if (keys.length === 3 && tag === SLOT_TAG && TAG_VALUE in value && SLOT_TREE_FIELD in value) {
+  if (
+    keys.length === 3 &&
+    tag === SLOT_TAG &&
+    TAG_VALUE in value &&
+    (SLOT_TREE_FIELD in value || SLOT_HOST_FIELD in value)
+  ) {
+    return tag;
+  }
+  if (keys.length === 3 && tag === STREAM_TAG && TAG_VALUE in value && STREAM_KIND_FIELD in value) {
     return tag;
   }
   return undefined;

@@ -5,6 +5,7 @@
  */
 import { encodeLeaf, needsObjectTag } from "../protocol/codec";
 import {
+  CYCLE_TAG,
   MAX_HELD_VALUES,
   OBJECT_TAG,
   REFERENCE_TAG,
@@ -76,11 +77,15 @@ export function addressValues(
     parent.push(key);
     return `{"$":"${REFERENCE_TAG}","v":"${key}"}`;
   };
-  const seen = new Set<object>();
+  // The objects, arrays, maps and sets above the value being encoded, by depth: a value met again
+  // while inside itself travels as the number of levels up to it (`CYCLE_TAG`), as Flight sends it.
+  const depths = new Map<object, number>();
   // Returns the value's JSON with large inner values replaced, and the length of its full JSON:
   // a value is addressed by its full size, so a tree whose parts are all addressed still gets one
   // key of its own.
-  const encode = (value: unknown, parent: string[]): [json: string, length: number] => {
+  // `inner` counts levels that are the encoder's own arrays (a map's entries and their pairs), not
+  // the app's: they are not counted as levels.
+  const encode = (value: unknown, parent: string[], inner = 0): [json: string, length: number] => {
     const special = encoded ? undefined : encodeSpecial?.(value);
     if (special !== undefined) {
       const json = JSON.stringify(special);
@@ -100,14 +105,18 @@ export function addressValues(
         json.length,
       ];
     }
-    if (seen.has(value)) throw new TypeError("circular values are not serializable");
-    seen.add(value);
+    const depth = inner > 0 ? undefined : depths.get(value);
+    if (depth !== undefined) {
+      const json = `{"$":"${CYCLE_TAG}","v":${depths.size - depth}}`;
+      return [json, json.length];
+    }
+    if (inner === 0) depths.set(value, depths.size);
     try {
       if (!encoded && (value instanceof Map || value instanceof Set)) {
         // The entries become an array inside the tag, addressed like any array.
         const entries =
           value instanceof Map ? Array.from(value, ([key, entry]) => [key, entry]) : [...value];
-        const [json, length] = encode(entries, parent);
+        const [json, length] = encode(entries, parent, value instanceof Map ? 2 : 1);
         const tag = value instanceof Map ? "M" : "S";
         const prefix = `{"$":"${tag}","v":`;
         return [`${prefix}${json}}`, length + prefix.length + 1];
@@ -121,7 +130,7 @@ export function addressValues(
       const parts: string[] = [];
       if (Array.isArray(value)) {
         for (const entry of value) {
-          const [json, entryLength] = encode(entry, own);
+          const [json, entryLength] = encode(entry, own, Math.max(inner - 1, 0));
           parts.push(json);
           length += entryLength + 1;
         }
@@ -144,7 +153,7 @@ export function addressValues(
       parent.push(...own);
       return [json, length];
     } finally {
-      seen.delete(value);
+      if (inner === 0) depths.delete(value);
     }
   };
   const roots: string[] = [];

@@ -5,24 +5,31 @@
  */
 import * as React from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
-import { createServerReference } from "../client/actions";
+import { createServerReference, setActionElementReviver } from "../client/actions";
 import { emit } from "../client/hooks";
 import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
-import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
+import { NOT_A_VALUE, decode, decodeTagged, resolveCycle, setOwn } from "../protocol/codec";
+import { fromStreamSteps, type StreamStep } from "../protocol/stream";
 import {
+  HTML_ELEMENT,
   ACTION_TAG,
+  CYCLE_TAG,
+  OBJECT_TAG,
   ID_POSITION_ATTRIBUTE,
   HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
   ISLAND_ELEMENT,
   PROMISE_SCRIPT_TYPE,
   PROMISE_TAG,
+  STREAM_KIND_FIELD,
+  STREAM_TAG,
   PROPS_SCRIPT_TYPE,
   REFERENCE_TAG,
   SLOT_ELEMENT,
   SLOT_TAG,
   SLOT_TEMPLATE_ELEMENT,
+  SLOT_HOST_FIELD,
   SLOT_TREE_FIELD,
   TAG,
   TAG_BOUND,
@@ -30,7 +37,7 @@ import {
   getTag,
 } from "../protocol/wire";
 import { atIdPosition, parseIdPosition, type IdPosition } from "./ids";
-import { getContexts } from "./island";
+import { getContexts, mergeSlotHostProps } from "./island";
 import { createSlotTree, updateServerTrees } from "./tree";
 
 const ISLAND_SELECTOR = `${ISLAND_ELEMENT}[src]`;
@@ -59,6 +66,8 @@ interface RootRecord {
   src: string;
   exportName: string;
   props: Record<string, unknown>;
+  /** The props as the server sent them, to find the same island in a later render. */
+  wire: string;
   serverHTML: string;
   restore(error: unknown): void;
   dispose(): void;
@@ -157,28 +166,114 @@ function insideAnotherIsland(container: Element, scope: ParentNode): boolean {
   return false;
 }
 
+/** A slot's one host element, as the server sent it (see `SLOT_HOST_FIELD`). */
+interface SlotHostReference {
+  t: string;
+  p: Record<string, unknown>;
+}
+
+// Elements that take no children, so no inner HTML either.
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "source",
+  "track",
+  "wbr",
+]);
+
+/**
+ * A slot whose server output is one host element. The element keeps its server HTML inside, and a
+ * client component that clones the slot (`asChild`) gives its props to the element itself.
+ */
+function HostSlot({
+  name,
+  host,
+  html,
+  ...given
+}: { name: string; host: SlotHostReference; html: string } & Record<string, unknown>) {
+  return React.createElement(
+    SLOT_ELEMENT,
+    { name, style: { display: "contents" }, suppressHydrationWarning: true },
+    React.createElement(host.t, {
+      ...mergeSlotHostProps(host.p, given),
+      suppressHydrationWarning: true,
+      ...(VOID_ELEMENTS.has(host.t) ? {} : { dangerouslySetInnerHTML: { __html: html } }),
+    }),
+  );
+}
+
+/**
+ * Where a revive is: the objects, arrays, maps and sets above the value, revived (what a cycle
+ * reference names), and the highest of them a cycle reference below has named.
+ */
+interface ReviveScope {
+  ancestors: unknown[];
+  lowest: number;
+}
+
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
-function revive(value: unknown, container: Element, values: ValueStore): unknown {
+function revive(
+  value: unknown,
+  container: Element,
+  values: ValueStore,
+  scope: ReviveScope = { ancestors: [], lowest: Infinity },
+): unknown {
   if (value && typeof value === "object") {
     const cached = revivedValues.get(value);
     if (cached !== undefined) return cached;
     const slotsBefore = slotsRevived;
-    const revived = reviveUncached(value, container, values);
-    if (slotsRevived === slotsBefore) revivedValues.set(value, revived);
+    const depth = scope.ancestors.length;
+    const outer = scope.lowest;
+    scope.lowest = Infinity;
+    const revived = reviveUncached(value, container, values, scope);
+    // A value that refers to one above it is a different value elsewhere: it is not kept.
+    if (slotsRevived === slotsBefore && scope.lowest >= depth) revivedValues.set(value, revived);
+    scope.lowest = Math.min(outer, scope.lowest);
     return revived;
   }
   return value;
 }
 
-function reviveUncached(value: object, container: Element, values: ValueStore): unknown {
+/** Fills `into` with `fill` while cycle references inside may name it; `fill` says whether anything changed. */
+function reviveInto<T>(
+  into: T,
+  scope: ReviveScope,
+  fill: (into: T) => boolean,
+): { value: T; changed: boolean } {
+  scope.ancestors.push(into);
+  try {
+    return { value: into, changed: fill(into) };
+  } finally {
+    scope.ancestors.pop();
+  }
+}
+
+function reviveUncached(
+  value: object,
+  container: Element,
+  values: ValueStore,
+  scope: ReviveScope,
+): unknown {
+  const child = (entry: unknown) => revive(entry, container, values, scope);
   if (Array.isArray(value)) {
-    let changed = false;
-    const revived = value.map((entry) => {
-      const next = revive(entry, container, values);
-      if (next !== entry) changed = true;
-      return next;
+    const revived = reviveInto([] as unknown[], scope, (into) => {
+      let changed = false;
+      for (const entry of value) {
+        const next = child(entry);
+        into.push(next);
+        if (next !== entry) changed = true;
+      }
+      return changed;
     });
-    return changed ? revived : value;
+    return revived.changed ? revived.value : value;
   }
   const object = value as Record<string, unknown>;
   const tag = getTag(object);
@@ -198,6 +293,15 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
         tree,
       );
     }
+    const host = object[SLOT_HOST_FIELD] as SlotHostReference | undefined;
+    if (host && typeof host.t === "string" && host.p && typeof host.p === "object") {
+      return React.createElement(HostSlot, {
+        key: name,
+        name,
+        host,
+        html: findSlot(container, name)?.firstElementChild?.innerHTML ?? "",
+      });
+    }
     const html = findSlot(container, name)?.innerHTML ?? "";
     return React.createElement(SLOT_ELEMENT, {
       key: name,
@@ -210,20 +314,58 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
   if (tag === PROMISE_TAG && typeof object[TAG_VALUE] === "string") {
     return islandPromise(object[TAG_VALUE], container, values);
   }
+  if (tag === STREAM_TAG && typeof object[TAG_VALUE] === "string") {
+    const kind = object[STREAM_KIND_FIELD];
+    if (kind !== "r" && kind !== "i" && kind !== "t") throw new TypeError("malformed islx stream");
+    return fromStreamSteps(
+      islandPromise(object[TAG_VALUE], container, values) as PromiseLike<StreamStep>,
+      kind,
+    );
+  }
   if (tag === REFERENCE_TAG)
     throw new Error(`islx value ${String(object[TAG_VALUE])} was not resolved`);
+  if (tag === CYCLE_TAG) {
+    const target = resolveCycle(scope.ancestors, object[TAG_VALUE]);
+    scope.lowest = Math.min(scope.lowest, scope.ancestors.length - (object[TAG_VALUE] as number));
+    return target;
+  }
+  // Containers exist before their contents, so a cycle reference inside can name them.
+  const data = object[TAG_VALUE];
+  if (tag === "M" && Array.isArray(data)) {
+    return reviveInto(new Map(), scope, (map) => {
+      for (const pair of data) {
+        if (!Array.isArray(pair) || pair.length !== 2) throw new TypeError('malformed "M" tag');
+        map.set(child(pair[0]), child(pair[1]));
+      }
+      return true;
+    }).value;
+  }
+  if (tag === "S" && Array.isArray(data)) {
+    return reviveInto(new Set(), scope, (set) => {
+      for (const entry of data) set.add(child(entry));
+      return true;
+    }).value;
+  }
+  if (tag === OBJECT_TAG && data && typeof data === "object" && !Array.isArray(data)) {
+    return reviveInto({} as Record<string, unknown>, scope, (into) => {
+      for (const [key, entry] of Object.entries(data)) setOwn(into, key, child(entry));
+      return true;
+    }).value;
+  }
   if (tag !== undefined) {
-    const decoded = decodeTagged(object, (child) => revive(child, container, values));
+    const decoded = decodeTagged(object, child);
     if (decoded !== NOT_A_VALUE) return decoded;
   }
-  let changed = false;
-  const revived: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(object)) {
-    const next = revive(entry, container, values);
-    setOwn(revived, key, next);
-    if (next !== entry) changed = true;
-  }
-  return changed ? revived : value;
+  const revived = reviveInto({} as Record<string, unknown>, scope, (into) => {
+    let changed = false;
+    for (const [key, entry] of Object.entries(object)) {
+      const next = child(entry);
+      setOwn(into, key, next);
+      if (next !== entry) changed = true;
+    }
+    return changed;
+  });
+  return revived.changed ? revived.value : value;
 }
 
 type IslandThenable = Promise<unknown> & {
@@ -256,25 +398,51 @@ function findPromiseScript(container: Element, name: string): Element | null {
   return null;
 }
 
+type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
+
+/**
+ * Rebuilds the server trees of slots in a promise's value (installed by the hydration runtime,
+ * which has the module loader). They join the island's other prepared slots.
+ */
+let prepareValueSlots: ((container: Element, names: Set<string>) => Promise<void>) | null = null;
+
+/**
+ * Reads a promise's outcome and gives it to `done`: at once, or once the server trees of the slots
+ * in its value are rebuilt (their client modules load first).
+ */
 function readOutcome(
   script: Element,
   container: Element,
   values: ValueStore,
-): { ok: true; value: unknown } | { ok: false; reason: unknown } {
+  done: (outcome: Outcome) => void,
+): void {
+  let parsed: unknown;
   try {
     const text = script.textContent || "{}";
-    let parsed: unknown = JSON.parse(text);
+    parsed = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || !("v" in parsed)) {
-      return { ok: false, reason: new Error("islx: the promise rejected on the server") };
+      return done({ ok: false, reason: new Error("islx: the promise rejected on the server") });
     }
     if (text.includes(`"${TAG}":"${REFERENCE_TAG}"`)) {
       values.ingest(container.ownerDocument);
       parsed = values.resolve(parsed);
     }
-    return { ok: true, value: (revive(parsed, container, values) as { v: unknown }).v };
   } catch (reason) {
-    return { ok: false, reason };
+    return done({ ok: false, reason });
   }
+  const finish = () => {
+    try {
+      done({ ok: true, value: (revive(parsed, container, values) as { v: unknown }).v });
+    } catch (reason) {
+      done({ ok: false, reason });
+    }
+  };
+  const names = new Set<string>();
+  collectTreeSlots(parsed, names);
+  const prepared = preparedSlots.get(container);
+  for (const name of names) if (prepared?.has(name)) names.delete(name);
+  if (names.size === 0 || !prepareValueSlots) return finish();
+  prepareValueSlots(container, names).then(finish, (reason) => done({ ok: false, reason }));
 }
 
 /**
@@ -285,19 +453,6 @@ function readOutcome(
 function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
   const pending = pendingPromises.get(name);
   if (pending) return pending.thenable;
-  const script = findPromiseScript(container, name);
-  if (script) {
-    const outcome = readOutcome(script, container, values);
-    const thenable: IslandThenable = outcome.ok
-      ? Promise.resolve(outcome.value)
-      : Promise.reject(outcome.reason);
-    if (outcome.ok) Object.assign(thenable, { status: "fulfilled", value: outcome.value });
-    else {
-      thenable.catch(() => {});
-      Object.assign(thenable, { status: "rejected", reason: outcome.reason });
-    }
-    return thenable;
-  }
   let resolve!: (value: unknown) => void;
   let reject!: (reason: unknown) => void;
   const thenable: IslandThenable = new Promise((done, fail) => {
@@ -306,20 +461,28 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   });
   thenable.catch(() => {});
   thenable.status = "pending";
+  // Settled in place, so a `use` that reads it after this does not suspend.
+  const settle = (outcome: Outcome) => {
+    if (outcome.ok) {
+      Object.assign(thenable, { status: "fulfilled", value: outcome.value });
+      resolve(outcome.value);
+    } else {
+      Object.assign(thenable, { status: "rejected", reason: outcome.reason });
+      reject(outcome.reason);
+    }
+  };
+  const script = findPromiseScript(container, name);
+  if (script) {
+    readOutcome(script, container, values, settle);
+    return thenable;
+  }
   pendingPromises.set(name, {
     thenable,
     container,
     values,
     settle(found) {
       pendingPromises.delete(name);
-      const outcome = readOutcome(found, container, values);
-      if (outcome.ok) {
-        Object.assign(thenable, { status: "fulfilled", value: outcome.value });
-        resolve(outcome.value);
-      } else {
-        Object.assign(thenable, { status: "rejected", reason: outcome.reason });
-        reject(outcome.reason);
-      }
+      readOutcome(found, container, values, settle);
     },
   });
   if (!promiseObserver && typeof MutationObserver === "function") {
@@ -354,6 +517,17 @@ const PENDING_BOUNDARY = "$?";
  * only while the document loads; later (a navigation that streams) it would render it again in
  * the browser, so the island hydrates once React has revealed it.
  */
+/**
+ * True while the document still streams and the island's props, which the server writes after
+ * it, have not arrived: the island waits for them. Hydrating now fails, and restoring its server
+ * HTML is a change the stream watcher answers with another pass, which fails again.
+ */
+function awaitsProps(container: Element): boolean {
+  if (container.ownerDocument.readyState !== "loading") return false;
+  const id = container.getAttribute("props");
+  return !!id && !findPropsScript(container, id);
+}
+
 function awaitsStreamedContent(container: Element): boolean {
   const document = container.ownerDocument;
   if (document.readyState === "loading") return false;
@@ -470,6 +644,37 @@ export function createHydrationRuntime(options: HydrationOptions) {
 
   // Renders the server HTML parts of slot trees, and hydrates the islands inside them.
   const ServerHtml = createServerHtml({ hydrate, dispose });
+  // Elements an action returns rebuild as a slot's tree does: their client components are live.
+  setActionElementReviver(async ({ s: scope, h: html }) => {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const tree = await createSlotTree(template.content, scope, {
+      load: options.load,
+      ServerHtml,
+      values,
+    });
+    return (
+      tree ??
+      React.createElement(HTML_ELEMENT, {
+        style: { display: "contents" },
+        dangerouslySetInnerHTML: { __html: html },
+      })
+    );
+  });
+
+  prepareValueSlots = async (container, names) => {
+    const trees = preparedSlots.get(container) ?? new Map<string, React.ReactNode>();
+    await Promise.all(
+      Array.from(names, async (name) => {
+        const slot = findSlot(container, name);
+        const tree =
+          slot && (await createSlotTree(slot, name, { load: options.load, ServerHtml, values }));
+        if (!tree) throw new Error(`slot ${name} has no server tree`);
+        trees.set(name, tree);
+      }),
+    );
+    preparedSlots.set(container, trees);
+  };
 
   /** Rebuilds the server trees of an island's slots, loading their client modules. */
   async function prepareSlots(container: Element, id: string): Promise<void> {
@@ -516,6 +721,12 @@ export function createHydrationRuntime(options: HydrationOptions) {
     Array.from(scope.querySelectorAll<Element>(ISLAND_SELECTOR)).filter(
       (container) => !container.parentElement?.closest(ISLAND_SELECTOR),
     );
+  /**
+   * An island's props as the server sent them, without its own id: the names of its slots start
+   * with that id, which follows the island's position, so the same item moved keeps the same text.
+   */
+  const wireOf = (container: Element, id: string) =>
+    (findPropsScript(container, id)?.textContent ?? "").split(id).join("");
   const keyOf = (container: Element) =>
     `${container.getAttribute("src")}#${container.getAttribute("export") || "default"}`;
 
@@ -536,7 +747,8 @@ export function createHydrationRuntime(options: HydrationOptions) {
         !pending.has(container) &&
         !insideAnotherIsland(container, scope) &&
         !container.closest(STREAM_STAGING) &&
-        !awaitsStreamedContent(container),
+        !awaitsStreamedContent(container) &&
+        !awaitsProps(container),
     );
 
     await Promise.all(
@@ -636,6 +848,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
                   src,
                   exportName,
                   props,
+                  wire: wireOf(container, id),
                   serverHTML,
                   restore,
                   dispose() {
@@ -676,9 +889,11 @@ export function createHydrationRuntime(options: HydrationOptions) {
 
   /**
    * Keeps the live islands of `current` when the same page renders again (after an action, or
-   * a refresh): each island of `next` that renders the same component at the same position takes
-   * over the live root with its new props, so its state survives. Call it before replacing
-   * `current`; islands it does not carry over hydrate from `next` as usual.
+   * a refresh): each island of `next` takes over a live root of the same component with its new
+   * props, so its state survives. React keeps state by key, which the browser never sees: an
+   * island whose props are unchanged takes the live island with those props first (an item that
+   * stays in a list while others are removed or move), and the rest pair up in document order.
+   * Call it before replacing `current`; islands it does not carry over hydrate from `next` as usual.
    */
   function carryOver(current: ParentNode, next: ParentNode): number {
     const live = new Map<string, Element[]>();
@@ -687,11 +902,29 @@ export function createHydrationRuntime(options: HydrationOptions) {
       const key = keyOf(container);
       live.set(key, [...(live.get(key) ?? []), container]);
     }
-    let carried = 0;
-    for (const container of topLevel(next)) {
-      const previous = live.get(keyOf(container))?.shift();
-      const record = previous && roots.get(previous);
+    const incoming = topLevel(next).map((container) => {
       const id = container.getAttribute("props");
+      return { container, id, wire: id ? wireOf(container, id) : "" };
+    });
+    const pairs = new Map<Element, Element>();
+    const take = (key: string, matches: (previous: Element) => boolean) => {
+      const candidates = live.get(key);
+      const index = candidates ? candidates.findIndex(matches) : -1;
+      return index < 0 ? undefined : candidates!.splice(index, 1)[0];
+    };
+    for (const { container, wire } of incoming) {
+      const previous = take(keyOf(container), (candidate) => roots.get(candidate)?.wire === wire);
+      if (previous) pairs.set(container, previous);
+    }
+    for (const { container } of incoming) {
+      if (pairs.has(container)) continue;
+      const previous = take(keyOf(container), () => true);
+      if (previous) pairs.set(container, previous);
+    }
+    let carried = 0;
+    for (const { container, id, wire } of incoming) {
+      const previous = pairs.get(container);
+      const record = previous && roots.get(previous);
       if (!previous || !record || !id) continue;
       try {
         const props = readProps(container, id);
@@ -699,6 +932,7 @@ export function createHydrationRuntime(options: HydrationOptions) {
           element(previous, record.Component, props, record.restore, record.position),
         );
         record.props = props;
+        record.wire = wire;
         container.replaceWith(previous);
         carried++;
       } catch (error) {
@@ -744,9 +978,9 @@ export function createHydrationRuntime(options: HydrationOptions) {
    */
   let watching = false;
   function watchStream(document: Document): void {
-    if (watching || document.readyState !== "loading" || typeof MutationObserver !== "function") {
-      return;
-    }
+    if (watching || typeof MutationObserver !== "function") return;
+    // React batches reveals, so staged content can still wait once the document is parsed.
+    if (document.readyState !== "loading" && !document.querySelector(STREAM_STAGING)) return;
     watching = true;
     const removed = new Set<Node>();
     let queued = false;

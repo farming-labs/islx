@@ -2,6 +2,7 @@
 import {
   Suspense,
   act,
+  cloneElement,
   createContext,
   useContext,
   createElement as h,
@@ -10,6 +11,7 @@ import {
   useEffect,
   useId,
   useState,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -161,7 +163,18 @@ async function ServerSection({ children }: { children?: ReactNode }) {
   return h("article", null, h("p", null, "server text"), children);
 }
 
+// Clones its server child, as \`asChild\` components (Radix's Slot) do: the props land on the child.
+function Trigger({ children }: { children?: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return cloneElement(children as ReactElement<Record<string, unknown>>, {
+    className: "trigger",
+    "data-state": open ? "open" : "closed",
+    onClick: () => setOpen((value) => !value),
+  });
+}
+
 const modules: Record<string, Record<string, unknown>> = {
+  "/src/trigger.tsx": { Trigger },
   "/src/counter.tsx": { Counter },
   "/src/waits.tsx": { Waits },
   "/src/quote.tsx": { Quote },
@@ -174,7 +187,25 @@ const modules: Record<string, Record<string, unknown>> = {
   "/src/theme.tsx": { ThemeProvider, ThemeLabel },
 };
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
+const TriggerIsland = createIsland(Trigger, "/src/trigger.tsx", "Trigger");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
+function Cycle({ node, map, set, again }: Record<string, any>) {
+  const [clicks, setClicks] = useState(0);
+  const checks = [
+    node.self === node,
+    node.children[0].parent === node,
+    map.get("me") === map,
+    [...set][0][0] === set,
+    again.self === again && again.big.length === 600,
+  ];
+  return h(
+    "button",
+    { "data-cycle": "", onClick: () => setClicks(clicks + 1) },
+    `${node.name} ${checks.join(" ")} ${clicks}`,
+  );
+}
+modules["/src/cycle.tsx"] = { Cycle };
+const CycleIsland = createIsland(Cycle, "/src/cycle.tsx", "Cycle");
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
@@ -252,6 +283,25 @@ describe("islands", () => {
     expect(document.querySelector("[data-server]")).toBeNull();
     await act(async () => document.querySelector<HTMLButtonElement>("[data-toggle]")!.click());
     expect(document.querySelector("[data-server]")!.textContent).toBe("rendered on the server");
+  });
+
+  it("give the server child the props a client component clones onto it", async () => {
+    const errors = spyErrors();
+    const markup = await html(
+      h(TriggerIsland, null, h("button", { type: "button", className: "own" }, "Open")),
+    );
+    expect(markup).toContain(
+      '<button type="button" class="trigger own" data-state="closed">Open</button>',
+    );
+    await mount(markup);
+    const button = document.querySelector("button")!;
+    expect(document.querySelector("f-slot")!.hasAttribute("class")).toBe(false);
+    await act(async () => button.click());
+    expect(document.querySelector("button")).toBe(button);
+    expect(button.getAttribute("data-state")).toBe("open");
+    expect(button.className).toBe("trigger own");
+    expect(button.textContent).toBe("Open");
+    expect(errors()).toEqual([]);
   });
 
   it("send a shared value once, and not at all to a browser that holds it", async () => {
@@ -364,6 +414,26 @@ describe("islands", () => {
     });
   });
 
+  it("replay every click made while a deferred island loads, in order", async () => {
+    const LazyCounter = createIsland(Counter, "/src/counter.tsx", "Counter", "interaction");
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => (release = resolve));
+    const islands = await mount(await html(h(LazyCounter, { start: 0, label: "twice" })), {
+      load: async (src) => (await loaded, modules[src]!),
+    });
+    const button = document.querySelector<HTMLButtonElement>("[data-counter=twice]")!;
+    button.click();
+    button.click();
+    await act(async () => {
+      release();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+      expect(document.querySelector("[data-counter=twice]")!.textContent).toBe("twice 2");
+    });
+  });
+
   it("keep an island's state when the page renders again", async () => {
     const islands = await mount(
       await html(h("div", { id: "page" }, h(CounterIsland, { start: 0, label: "kept" }))),
@@ -383,13 +453,241 @@ describe("islands", () => {
     expect(document.querySelector("[data-counter=kept]")!.textContent).toBe("kept 1");
   });
 
-  it("render without hydrating when props cannot travel, and say why", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const markup = await html(
-      h(ShowsIsland, { at: new Date(0), tags: [], id: 1, onPick: () => {} }),
+  it("wait for a streamed island's props, which arrive after it, instead of failing", async () => {
+    const markup = await html(h(CounterIsland, { start: 0, label: "late" }));
+    const props = markup.match(/<script type="f\/props"[^>]*>.*?<\/script>/)![0];
+    document.body.innerHTML = markup.replace(props, "");
+    // The stream has written the island and not yet its props.
+    const readyState = vi.spyOn(document, "readyState", "get").mockReturnValue("loading");
+    const report = vi.fn();
+    let loads = 0;
+    const islands = runtime({
+      report,
+      load: async (src) => (loads++, modules[src]!),
+    });
+    try {
+      await act(async () => {
+        await islands.hydrate(document);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(report).not.toHaveBeenCalled();
+      expect(islands.rootCount()).toBe(0);
+
+      await act(async () => {
+        document.querySelector("f-island")!.insertAdjacentHTML("afterend", props);
+      });
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(islands.rootCount()).toBe(1);
+      });
+      readyState.mockReturnValue("complete");
+      await act(async () => {
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+      });
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>("[data-counter=late]")!.click(),
+      );
+      expect(document.querySelector("[data-counter=late]")!.textContent).toBe("late 1");
+      expect(report).not.toHaveBeenCalled();
+      expect(loads).toBe(1);
+    } finally {
+      readyState.mockRestore();
+    }
+  });
+
+  it("hydrate an island React reveals after the document is parsed", async () => {
+    // React batches reveals, so staged Suspense content can still wait once parsing has ended.
+    document.body.innerHTML = `<main><!--$?--><template id="B:0"></template>loading<!--/$--></main><div hidden id="S:0">${await html(h(CounterIsland, { start: 0, label: "revealed" }))}</div>`;
+    const report = vi.fn();
+    const islands = runtime({ report });
+    await act(async () => {
+      await islands.hydrate(document);
+    });
+    expect(islands.rootCount()).toBe(0);
+
+    await act(async () => {
+      const staged = document.getElementById("S:0")!;
+      const main = document.querySelector("main")!;
+      main.replaceChildren(...staged.childNodes);
+      staged.remove();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+    });
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-counter=revealed]")!.click(),
     );
-    expect(markup).not.toContain("<f-island");
-    expect(warn.mock.calls[0]![0]).toContain("functions are not serializable");
+    expect(document.querySelector("[data-counter=revealed]")!.textContent).toBe("revealed 1");
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("keep each island's state with its item when a list loses one, as React keys do", async () => {
+    const list = (labels: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        labels.map((label) => h(CounterIsland, { key: label, start: 0, label })),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    await act(async () => {
+      for (const label of ["a", "b", "c"]) {
+        document.querySelector<HTMLButtonElement>(`[data-counter=${label}]`)!.click();
+      }
+    });
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-counter=b]")!.click());
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-counter=b]")!.textContent).toBe("b 2");
+    expect(document.querySelector("[data-counter=c]")!.textContent).toBe("c 1");
+  });
+
+  it("keep an island with server children with its item when the list above it shrinks", async () => {
+    const list = (titles: string[]) =>
+      h(
+        "div",
+        { id: "page" },
+        titles.map((title) =>
+          h(PanelIsland, { key: title, title }, h("p", { "data-body": title }, `${title} body`)),
+        ),
+      );
+    const islands = await mount(await html(list(["a", "b", "c"])));
+    const toggle = (title: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>("[data-toggle]")].find(
+        (button) => button.textContent === title,
+      )!;
+    await act(async () => toggle("b").click());
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    const next = document.createElement("div");
+    next.innerHTML = await html(list(["b", "c"]));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(2);
+      current.replaceWith(next.firstElementChild!);
+    });
+    expect(document.querySelector("[data-body=b]")).toBeNull();
+    expect(document.querySelector("[data-body=c]")!.textContent).toBe("c body");
+  });
+
+  it("refuse to render an island whose props cannot be sent, as React Server Components do", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onPick = () => {};
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: 1, onPick })),
+    ).rejects.toThrow(/Shows \(\/src\/shows\.tsx\).*functions are not serializable \(onPick\)/);
+    class Point {
+      x = 1;
+    }
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: new Point() })),
+    ).rejects.toThrow("Shows (/src/shows.tsx)");
+  });
+
+  it("render the elements a promise prop resolves to, and hydrate them, as React Server Components do", async () => {
+    const errors = spyErrors();
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    function Later({ content }: { content: Promise<ReactNode> }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h("button", { "data-later": "", onClick: () => setClicks(clicks + 1) }, `later ${clicks}`),
+        h("section", { "data-content": "" }, use(content)),
+      );
+    }
+    modules["/src/later.tsx"] = { Later };
+    const LaterIsland = createIsland(Later, "/src/later.tsx", "Later");
+    const content = tick().then(() =>
+      h("strong", null, "arrived ", h(CounterIsland, { start: 4, label: "inner" })),
+    );
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(LaterIsland, { content })),
+    );
+    expect(markup).toContain("arrived");
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-later]")!.click());
+    expect(document.querySelector("[data-later]")!.textContent).toBe("later 1");
+    expect(document.querySelector("[data-content] strong")!.textContent).toBe("arrived inner 4");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="inner"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="inner"]')!.textContent).toBe("inner 5");
+    expect(errors()).toEqual([]);
+  });
+
+  it("give a stream prop's chunks to the server render too, elements included", async () => {
+    const errors = spyErrors();
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    const firsts = new WeakMap<object, Promise<ReactNode>>();
+    // Reads the stream's first chunk while rendering, on the server and in the browser.
+    const first = (stream: ReadableStream<ReactNode>) => {
+      let read = firsts.get(stream);
+      if (!read) {
+        read = stream
+          .getReader()
+          .read()
+          .then((chunk) => chunk.value);
+        firsts.set(stream, read);
+      }
+      return read;
+    };
+    function Ticker({ ticks }: { ticks: ReadableStream<ReactNode> }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-ticker": "", onClick: () => setClicks(clicks + 1) },
+          `ticker ${clicks}`,
+        ),
+        h("output", { "data-first": "" }, use(first(ticks))),
+      );
+    }
+    modules["/src/ticker.tsx"] = { Ticker };
+    const TickerIsland = createIsland(Ticker, "/src/ticker.tsx", "Ticker");
+    const ticks = new ReadableStream<ReactNode>({
+      async start(controller) {
+        await tick();
+        controller.enqueue(h("b", null, "tick ", h(CounterIsland, { start: 1, label: "tick" })));
+        controller.close();
+      },
+    });
+    const markup = await html(h(Suspense, { fallback: null }, h(TickerIsland, { ticks })));
+    expect(markup).toContain("<b>tick");
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-ticker]")!.click());
+    expect(document.querySelector("[data-ticker]")!.textContent).toBe("ticker 1");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="tick"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="tick"]')!.textContent).toBe("tick 2");
+    expect(errors()).toEqual([]);
+  });
+
+  it("send props that refer to themselves, as React Server Components do", async () => {
+    type Node = { name: string; self?: Node; children: Array<{ parent: Node }>; big: string };
+    const node: Node = { name: "root", children: [], big: "x".repeat(600) };
+    node.self = node;
+    node.children.push({ parent: node });
+    const map = new Map<string, unknown>();
+    map.set("me", map);
+    const set = new Set<unknown>();
+    set.add([set]);
+    const markup = await html(h(CycleIsland, { node, map, set, again: node }));
+    expect(markup).toContain("<f-island");
+    expect(markup).toContain("root true true true true true 0");
+    expect(markup).toContain('{"$":"C","v":1}');
+    expect(markup).toContain('type="f/value"');
+    await mount(markup);
+    const button = document.querySelector<HTMLButtonElement>("[data-cycle]")!;
+    await act(async () => button.click());
+    expect(button.textContent).toBe("root true true true true true 1");
   });
 });
 
@@ -577,6 +875,100 @@ describe("promises in islands", () => {
   });
 });
 
+describe("streams in islands", () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const stream = <T>(chunks: T[], failAt?: number) =>
+    new ReadableStream<T>({
+      async start(controller) {
+        for (const [index, chunk] of chunks.entries()) {
+          await tick();
+          if (index === failAt) return controller.error(new Error("disk on fire"));
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+  async function* generate<T>(chunks: T[]) {
+    for (const chunk of chunks) {
+      await tick();
+      yield chunk;
+    }
+    return "end";
+  }
+  async function readAll(value: unknown): Promise<unknown[]> {
+    const chunks: unknown[] = [];
+    if (value instanceof ReadableStream) {
+      const reader = value.getReader();
+      for (let read = await reader.read(); !read.done; read = await reader.read()) {
+        chunks.push(read.value);
+      }
+      return chunks;
+    }
+    for await (const chunk of value as AsyncIterable<unknown>) chunks.push(chunk);
+    return chunks;
+  }
+  // The props the browser hydrated the island with.
+  async function hydratedValue(markup: string) {
+    received.length = 0;
+    await mount(markup);
+    return received[0] as unknown;
+  }
+
+  it("arrive as a ReadableStream the browser reads chunk by chunk, as React Server Components send them", async () => {
+    const markup = await html(
+      h(KeepsIsland, { value: stream(["a", { b: new Date(0) }, new Uint8Array([1, 2])]) as never }),
+    );
+    expect(markup).toMatch(/\{"value":\{"\$":"W","v":"[^"]+","k":"r"\}\}/);
+    const value = await hydratedValue(markup);
+    expect(value).toBeInstanceOf(ReadableStream);
+    expect(await readAll(value)).toEqual(["a", { b: new Date(0) }, new Uint8Array([1, 2])]);
+  });
+
+  it("arrive as an async iterable, or as the iterator a generator is", async () => {
+    const iterable = { [Symbol.asyncIterator]: () => generate([1, 2]) };
+    const value = await hydratedValue(await html(h(KeepsIsland, { value: iterable as never })));
+    expect(value).not.toBeInstanceOf(ReadableStream);
+    expect(await readAll(value)).toEqual([1, 2]);
+    // An iterable can be read again, from the start.
+    expect(await readAll(value)).toEqual([1, 2]);
+
+    const iterator = (await hydratedValue(
+      await html(h(KeepsIsland, { value: generate(["x", "y"]) as never })),
+    )) as AsyncIterator<string, string>;
+    expect(await iterator.next()).toEqual({ value: "x", done: false });
+    expect(await iterator.next()).toEqual({ value: "y", done: false });
+    expect(await iterator.next()).toEqual({ value: "end", done: true });
+  });
+
+  it("deliver the chunks that stream in after the island hydrated", async () => {
+    const markup = await html(h(KeepsIsland, { value: stream(["early", "late"]) as never }));
+    const outcomes = [...markup.matchAll(/<script type="f\/promise"[^>]*>.*?<\/script>/g)].map(
+      (match) => match[0],
+    );
+    expect(outcomes).toHaveLength(3);
+    const value = await hydratedValue(
+      outcomes.reduce((page, outcome) => page.replace(outcome, ""), markup),
+    );
+    const reading = readAll(value);
+    await act(async () => {
+      for (const outcome of outcomes) {
+        document.body.insertAdjacentHTML("beforeend", outcome);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    expect(await reading).toEqual(["early", "late"]);
+  });
+
+  it("error in the browser after the chunks before the failure, without the server's reason", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const markup = await html(h(KeepsIsland, { value: stream(["ok", "never"], 1) as never }));
+    expect(markup).not.toContain("disk on fire");
+    const reader = ((await hydratedValue(markup)) as ReadableStream<string>).getReader();
+    expect(await reader.read()).toEqual({ value: "ok", done: false });
+    await expect(reader.read()).rejects.toThrow("rejected on the server");
+  });
+});
+
 describe("islands in a page that streams after it loaded (a navigation)", () => {
   // The island's shell, with its Suspense boundary still waiting, and the rest of the stream.
   async function shell() {
@@ -682,6 +1074,231 @@ describe("actions in islands", () => {
       expect(document.querySelector("button")!.textContent).toBe("core:Ada");
     });
     expect(hoisted).toHaveBeenCalledWith(["core"], "Ada");
+  });
+
+  it("show the elements an action returns, with their client components live", async () => {
+    const errors = spyErrors();
+    const saved = vi.fn();
+    const save = async () => {
+      saved();
+      return {
+        note: h("p", { "data-note": "" }, "saved ", h(CounterIsland, { start: 1, label: "r" })),
+      };
+    };
+    registerServerReference(save, "island-save-element");
+    function Saver({ action }: { action: typeof save }) {
+      const [note, setNote] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-save": "", onClick: async () => setNote((await action()).note) },
+          "save",
+        ),
+        note,
+      );
+    }
+    modules["/src/saver.tsx"] = { Saver };
+    const SaverIsland = createIsland(Saver, "/src/saver.tsx", "Saver");
+    const markup = await html(h(SaverIsland, { action: save }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-save]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-note]")?.textContent).toBe("saved r 1");
+    });
+    expect(saved).toHaveBeenCalledTimes(1);
+    const counter = document.querySelector<HTMLButtonElement>("[data-counter=r]")!;
+    await act(async () => counter.click());
+    expect(counter.textContent).toBe("r 2");
+    expect(errors()).toEqual([]);
+  });
+
+  it("show server-only elements an action returns, after their async components ran", async () => {
+    async function Total() {
+      await Promise.resolve();
+      return h("strong", null, "3 items");
+    }
+    const count = async () => [h("em", { key: "a" }, "counted:"), h(Total, { key: "b" })];
+    registerServerReference(count, "island-count-element");
+    function Counts({ action }: { action: typeof count }) {
+      const [shown, setShown] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h("button", { "data-count": "", onClick: async () => setShown(await action()) }, "count"),
+        h("output", null, shown),
+      );
+    }
+    modules["/src/counts.tsx"] = { Counts };
+    const CountsIsland = createIsland(Counts, "/src/counts.tsx", "Counts");
+    const markup = await html(h(CountsIsland, { action: count }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-count]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("output")!.textContent).toBe("counted:3 items");
+    });
+    expect(document.querySelector("output strong")!.textContent).toBe("3 items");
+  });
+
+  it("keep the promises and streams an action returns unresolved, as the renderer walks them", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const mixed = async () => ({
+      total: gate.then(() => 3),
+      ticks: (async function* () {
+        await gate;
+        yield 1;
+      })(),
+    });
+    registerServerReference(mixed, "island-mixed-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-mixed-result")()) as {
+      total: Promise<number>;
+      ticks: AsyncIterator<number>;
+    };
+    expect(result.total).toBeInstanceOf(Promise);
+    release();
+    expect(await result.total).toBe(3);
+    expect(await result.ticks.next()).toEqual({ value: 1, done: false });
+  });
+
+  it("render the elements an action returns inside the framework's run, once", async () => {
+    const runs = vi.fn();
+    const label = async () => h("em", { "data-label": "" }, "labelled");
+    registerServerReference(label, "island-label-element");
+    function Labeller({ action }: { action: () => Promise<unknown> }) {
+      const [shown, setShown] = useState<ReactNode>(null);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          {
+            "data-label-button": "",
+            onClick: async () => setShown(((await action()) as { value: ReactNode }).value),
+          },
+          "label",
+        ),
+        h("output", null, shown),
+      );
+    }
+    modules["/src/labeller.tsx"] = { Labeller };
+    const LabellerIsland = createIsland(Labeller, "/src/labeller.tsx", "Labeller");
+    const markup = await html(h(LabellerIsland, { action: label }));
+    // A framework's run that wraps what the action returned, as Farm's does.
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+        {
+          run: async <T>(_request: Request, action: () => Promise<T>) => {
+            runs();
+            return { value: await action() } as T;
+          },
+        },
+      ),
+    );
+    await mount(markup);
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-label-button]")!.click(),
+    );
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("output [data-label]")?.textContent).toBe("labelled");
+    });
+    expect(runs).toHaveBeenCalledTimes(1);
+  });
+
+  it("render the elements in the promises and streams an action returns, inside the framework's run", async () => {
+    const { AsyncLocalStorage } = await import("node:async_hooks");
+    const request = new AsyncLocalStorage<string>();
+    // A server component that reads the request, as one calling cookies() would.
+    async function Greeting({ name }: { name: string }) {
+      await Promise.resolve();
+      return h("em", null, `${name} for ${request.getStore() ?? "nobody"}`);
+    }
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    const greet = async () => ({
+      later: tick().then(() => h(Greeting, { name: "later" })),
+      rows: (async function* () {
+        await tick();
+        yield h(Greeting, { name: "row" });
+      })(),
+    });
+    registerServerReference(greet, "island-greet-elements");
+    function Greeter({ action }: { action: () => Promise<unknown> }) {
+      const [shown, setShown] = useState<ReactNode[]>([]);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          {
+            "data-greet": "",
+            onClick: async () => {
+              const result = (await action()) as {
+                later: Promise<ReactNode>;
+                rows: AsyncIterator<ReactNode>;
+              };
+              const later = await result.later;
+              const row = (await result.rows.next()).value;
+              setShown([h("p", { key: "later" }, later), h("p", { key: "row" }, row)]);
+            },
+          },
+          "greet",
+        ),
+        h("output", { "data-greetings": "" }, shown),
+      );
+    }
+    modules["/src/greeter.tsx"] = { Greeter };
+    const GreeterIsland = createIsland(Greeter, "/src/greeter.tsx", "Greeter");
+    const markup = await html(h(GreeterIsland, { action: greet }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+        { run: (_request, action) => request.run("kinfe", action) },
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-greet]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-greetings]")?.textContent).toBe(
+        "later for kinferow for kinfe",
+      );
+    });
   });
 
   it("report a server form's submit to useFormStatus in an island inside it", async () => {

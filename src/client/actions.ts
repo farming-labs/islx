@@ -9,6 +9,7 @@
  */
 import { decode, encode } from "../protocol/codec";
 import { emit } from "./hooks";
+import { readStreamedResult } from "./result-stream";
 import {
   ACTION_HEADER,
   ACTION_STALE_HEADER,
@@ -16,11 +17,14 @@ import {
   BLOB_TAG,
   BOUND_FIELD,
   CALL_FIELD,
+  ELEMENT_TAG,
   FORM_DATA_TAG,
+  RESULT_STREAM_TYPE,
   attachmentField,
   TAG,
   TAG_BOUND,
   TAG_VALUE,
+  getTag,
 } from "../protocol/wire";
 
 type AnyFunction = (...args: any[]) => any;
@@ -112,6 +116,56 @@ export function decodeActionReference(object: Record<string, unknown>): AnyFunct
   return createServerReference(object[TAG_VALUE], token);
 }
 
+/** Elements an action returned, as the server rendered them (`ELEMENT_TAG`). */
+export interface RenderedElementsPayload {
+  /** The scope of their server tree. */
+  s: string;
+  /** Their server HTML, with the tree. */
+  h: string;
+}
+
+const ELEMENT_REVIVER = Symbol.for("islx.client.element-reviver");
+
+/**
+ * @internal Rebuilds the elements an action returned. The React hydration runtime installs it,
+ * with the module loader it hydrates islands with.
+ */
+export function setActionElementReviver(
+  revive: (payload: RenderedElementsPayload) => Promise<unknown>,
+): void {
+  (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] = revive;
+}
+
+/** The elements in a result, rebuilt, by the payload object that carried them. */
+async function reviveElements(value: unknown): Promise<Map<object, unknown>> {
+  const found: Record<string, unknown>[] = [];
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== "object") return;
+    if (getTag(node) === ELEMENT_TAG) {
+      found.push(node as Record<string, unknown>);
+      return;
+    }
+    for (const entry of Array.isArray(node) ? node : Object.values(node)) walk(entry);
+  };
+  walk(value);
+  const revived = new Map<object, unknown>();
+  if (found.length === 0) return revived;
+  const revive = (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] as
+    | ((payload: RenderedElementsPayload) => Promise<unknown>)
+    | undefined;
+  if (!revive) throw new Error("the action returned elements, which need islx's React runtime");
+  await Promise.all(
+    found.map(async (object) => {
+      const payload = object[TAG_VALUE] as RenderedElementsPayload;
+      if (!payload || typeof payload.s !== "string" || typeof payload.h !== "string") {
+        throw new TypeError("malformed elements in the action's result");
+      }
+      revived.set(object, await revive(payload));
+    }),
+  );
+  return revived;
+}
+
 /** Returned by a call whose action this deploy no longer knows: the page reloads. */
 const STALE: unique symbol = Symbol("islx.action.stale");
 
@@ -170,7 +224,12 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     return STALE;
   }
   if (!response.ok) throw new Error(`Server action failed: ${response.status}`);
-  const payload = (await response.json()) as { result?: unknown; redirect?: string };
+  // A result with promises or streams in it streams: its first line is the result.
+  const streamed = (response.headers.get("content-type") ?? "").startsWith(RESULT_STREAM_TYPE)
+    ? await readStreamedResult(response, (object) => decodeActionReference(object), reviveElements)
+    : null;
+  const payload =
+    streamed?.payload ?? ((await response.json()) as { result?: unknown; redirect?: string });
   const navigator = state().navigator;
   if (typeof payload.redirect === "string") {
     reference.redirect = payload.redirect;
@@ -178,7 +237,13 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     else location.assign(payload.redirect);
     return undefined;
   }
-  const result = decode(payload.result, { decodeReference: decodeActionReference });
+  const elements = await reviveElements(payload.result);
+  const result = decode(payload.result, {
+    decodeReference: (object) =>
+      elements.has(object)
+        ? elements.get(object)
+        : (streamed?.reference(object) ?? decodeActionReference(object)),
+  });
   // The caller's pending state (`useFormStatus`, `useActionState`) lasts until the page shows
   // what the action changed.
   if (navigator.refresh) await navigator.refresh();
@@ -256,14 +321,23 @@ function createReference(reference: ClientReference): AnyFunction {
   return fn;
 }
 
+/** How many references are kept for identity; older ones a page stopped using are dropped. */
+const MAX_REFERENCES = 1000;
+
 /** The function that calls a server action; one per id and sealed values, so props keep identity. */
 export function createServerReference(id: string, token?: string, name?: string): AnyFunction {
   const key = token === undefined ? id : `${id}\0${token}`;
   const references = state().references;
   let reference = references.get(key);
-  if (!reference) {
+  if (reference) {
+    // Most recently used last, so the oldest is the one a page stopped using.
+    references.delete(key);
+  } else {
     reference = createReference({ id, token, bound: [], name });
-    references.set(key, reference);
+    if (references.size >= MAX_REFERENCES) {
+      references.delete(references.keys().next().value!);
+    }
   }
+  references.set(key, reference);
   return reference;
 }

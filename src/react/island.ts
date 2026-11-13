@@ -12,6 +12,13 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
+import {
+  fromStreamSteps,
+  getStreamKind,
+  toStreamSteps,
+  type StreamKind,
+  type StreamStep,
+} from "../protocol/stream";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
@@ -20,6 +27,7 @@ import {
   PROMISE_SCRIPT_TYPE,
   PROPS_SCRIPT_TYPE,
   SLOT_ELEMENT,
+  SLOT_HOST_FIELD,
   SLOT_TAG,
   SLOT_TEMPLATE_ELEMENT,
   SLOT_TREE_FIELD,
@@ -191,6 +199,93 @@ interface IslandSlots {
   placed: Set<string>;
   /** Each slot resolved (`renderSlotTree`), once the island's render has them. */
   trees: Map<string, SlotTree>;
+  /** The promises met so far in this render: the prefix of each one's slots. */
+  promises: number;
+  /** The value keys the browser holds, for the slots' trees. */
+  held: ReadonlySet<string> | null;
+}
+
+function createSlots(held: ReadonlySet<string> | null): IslandSlots {
+  return {
+    next: 0,
+    elements: new Map(),
+    references: new Map(),
+    placed: new Set(),
+    trees: new Map(),
+    promises: 0,
+    held,
+  };
+}
+
+/** Marks each slot reference with what the browser needs to show it (a tree, a host element). */
+function markSlotReferences(slots: IslandSlots): void {
+  for (const [name, reference] of slots.references) {
+    const tree = slots.trees.get(name);
+    if (tree?.rebuild) reference[SLOT_TREE_FIELD] = 1;
+    else if (tree?.host) reference[SLOT_HOST_FIELD] = { t: tree.host.tag, p: tree.host.props };
+  }
+}
+
+/**
+ * A promise prop, split as its value settles: the island renders `render`'s value and the browser
+ * gets `wire`'s, so elements in it render once inside `<f-slot>`, as element props do. One split
+ * per promise: React renders the island again with the same props after it suspends.
+ */
+const splitPromises = new WeakMap<object, { render: Promise<unknown>; wire: Promise<unknown> }>();
+/** The slots of a split promise's value, by its `wire` promise, for `IslandPromise` to write. */
+const promiseSlots = new WeakMap<object, Promise<IslandSlots>>();
+
+/**
+ * A stream prop, read once and split chunk by chunk: the island's server render reads one copy
+ * and the browser gets the other, as React Server Components give each their own.
+ */
+const splitStreams = new WeakMap<object, { render: unknown; wire: unknown }>();
+/** The first step of a split stream's browser copy, by that copy, for the encoder. */
+const wireSteps = new WeakMap<object, { first: Promise<StreamStep>; kind: StreamKind }>();
+
+/** @internal The steps the browser gets for a stream an island received, if it was split. */
+export function getWireSteps(
+  value: object,
+): { first: Promise<StreamStep>; kind: StreamKind } | undefined {
+  return wireSteps.get(value);
+}
+
+/** Splits each step's chunk (and return value) as it arrives; see `splitSlots`' promises. */
+function splitSteps(
+  steps: PromiseLike<StreamStep>,
+  prefix: string,
+  held: ReadonlySet<string> | null,
+  count: { next: number },
+): { render: Promise<StreamStep>; wire: Promise<StreamStep> } {
+  const parts = Promise.resolve(steps).then(async (step) => {
+    const inner = createSlots(held);
+    const split = (value: unknown) => splitSlots(value, `${prefix}${count.next++}_`, inner);
+    let render: StreamStep;
+    let wire: StreamStep;
+    if ("d" in step) {
+      const part = step.v === undefined ? null : split(step.v);
+      render = part ? { d: 1, v: part.render } : step;
+      wire = part ? { d: 1, v: part.wire } : step;
+    } else {
+      const part = split(step.v);
+      const next = splitSteps(step.n, prefix, held, count);
+      render = { v: part.render, n: next.render };
+      wire = { v: part.wire, n: next.wire };
+    }
+    if (inner.elements.size > 0) {
+      inner.trees = await renderSlots(inner.elements, held);
+      markSlotReferences(inner);
+    }
+    return { render, wire, inner };
+  });
+  const render = parts.then((part) => part.render);
+  const wire = parts.then((part) => part.wire);
+  render.catch(() => {});
+  wire.catch(() => {});
+  const inner = parts.then((part) => part.inner);
+  inner.catch(() => {});
+  promiseSlots.set(wire, inner);
+  return { render, wire };
 }
 
 // One resolution per island render: React renders the island again with the same props once the
@@ -204,25 +299,55 @@ function resolveSlots(
 ): Promise<Map<string, SlotTree>> {
   let resolved = resolvedSlots.get(props);
   if (!resolved) {
-    resolved = Promise.all(
-      Array.from(
-        elements,
-        async ([name, element]) => [name, await renderSlotTree(element, name, held)] as const,
-      ),
-    ).then((entries) => new Map(entries));
+    resolved = renderSlots(elements, held);
     resolvedSlots.set(props, resolved);
   }
   return resolved;
 }
 
+function renderSlots(
+  elements: Map<string, React.ReactElement>,
+  held: ReadonlySet<string> | null,
+): Promise<Map<string, SlotTree>> {
+  return Promise.all(
+    Array.from(
+      elements,
+      async ([name, element]) => [name, await renderSlotTree(element, name, held)] as const,
+    ),
+  ).then((entries) => new Map(entries));
+}
+
+/**
+ * @internal The props of a slot's host element after a client component cloned the slot with
+ * `given`: the clone's props win, and the classes and styles of both apply.
+ */
+export function mergeSlotHostProps(
+  own: Record<string, unknown>,
+  given: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...own, ...given };
+  const className = [given.className, own.className].filter(Boolean).join(" ");
+  if (className) merged.className = className;
+  if (own.style || given.style) {
+    merged.style = { ...(own.style as object), ...(given.style as object) };
+  }
+  return merged;
+}
+
 /** Server output in an island, where the island placed it. */
-function Slot({ name, slots }: { name: string; slots: IslandSlots }) {
+function Slot({
+  name,
+  slots,
+  ...given
+}: { name: string; slots: IslandSlots } & Record<string, unknown>) {
   slots.placed.add(name);
-  return React.createElement(
-    SLOT_ELEMENT,
-    { name, style: slotStyle },
-    slots.trees.get(name)?.element,
-  );
+  const tree = slots.trees.get(name);
+  // A clone (`asChild`) gives its props to the slot's element, as on the server of RSC.
+  const content =
+    tree?.host && Object.keys(given).length > 0
+      ? React.cloneElement(tree.host.element, mergeSlotHostProps(tree.host.props, given))
+      : tree?.element;
+  return React.createElement(SLOT_ELEMENT, { name, style: slotStyle }, content);
 }
 
 /**
@@ -234,6 +359,9 @@ function splitSlots(
   value: unknown,
   prefix: string,
   slots: IslandSlots,
+  // The copies of the objects above `value`: one that contains itself contains its copy, so the
+  // props render and travel with the same cycle.
+  copies: Map<object, { render: unknown; wire: unknown }> = new Map(),
 ): { render: unknown; wire: unknown } {
   if (isElement(value)) {
     const name = `${prefix}${slots.next++}`;
@@ -246,26 +374,77 @@ function splitSlots(
       wire: reference,
     };
   }
-  if (Array.isArray(value)) {
-    const parts = value.map((entry) => splitSlots(entry, prefix, slots));
-    return { render: parts.map((part) => part.render), wire: parts.map((part) => part.wire) };
-  }
-  if (value && typeof value === "object") {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
-    const render: Record<string, unknown> = {};
-    const wire: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      const part = splitSlots(entry, prefix, slots);
-      render[key] = part.render;
-      wire[key] = part.wire;
+  if (!value || typeof value !== "object") return { render: value, wire: value };
+  const copied = copies.get(value);
+  if (copied) return copied;
+  if (isThenable(value) && !runtimeTagged.has(value)) {
+    const prefixed = `${prefix}p${slots.promises++}_`;
+    let split = splitPromises.get(value);
+    if (!split) {
+      const held = slots.held;
+      const parts = Promise.resolve(value).then(async (resolved) => {
+        const inner = createSlots(held);
+        const part = splitSlots(resolved, prefixed, inner);
+        if (inner.elements.size > 0) {
+          inner.trees = await renderSlots(inner.elements, held);
+          markSlotReferences(inner);
+        }
+        return { part, inner };
+      });
+      split = {
+        render: parts.then(({ part }) => part.render),
+        wire: parts.then(({ part }) => part.wire),
+      };
+      // Whoever reads them sees a rejection; one nobody reads reports none.
+      split.render.catch(() => {});
+      split.wire.catch(() => {});
+      const inner = parts.then((part) => part.inner);
+      inner.catch(() => {});
+      promiseSlots.set(split.wire, inner);
+      splitPromises.set(value, split);
     }
-    return { render, wire };
+    return split;
   }
-  return { render: value, wire: value };
+  if (Array.isArray(value)) {
+    const copy = { render: [] as unknown[], wire: [] as unknown[] };
+    copies.set(value, copy);
+    for (const entry of value) {
+      const part = splitSlots(entry, prefix, slots, copies);
+      copy.render.push(part.render);
+      copy.wire.push(part.wire);
+    }
+    copies.delete(value);
+    return copy;
+  }
+  // A stream travels as one, a plain object that is an async iterable too (symbol key and all).
+  const kind = getStreamKind(value);
+  if (kind) {
+    const prefixed = `${prefix}w${slots.promises++}_`;
+    let split = splitStreams.get(value);
+    if (!split) {
+      const steps = splitSteps(toStreamSteps(value, kind), prefixed, slots.held, { next: 0 });
+      const wire = fromStreamSteps(steps.wire, kind) as object;
+      wireSteps.set(wire, { first: steps.wire, kind });
+      split = { render: fromStreamSteps(steps.render, kind), wire };
+      splitStreams.set(value, split);
+    }
+    return split;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
+  const copy = {
+    render: {} as Record<string, unknown>,
+    wire: {} as Record<string, unknown>,
+  };
+  copies.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    const part = splitSlots(entry, prefix, slots, copies);
+    copy.render[key] = part.render;
+    copy.wire[key] = part.wire;
+  }
+  copies.delete(value);
+  return copy;
 }
-
-const warned = new Set<string>();
 
 type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
 // One settled promise per promise, so React's retries read the same one.
@@ -289,12 +468,13 @@ const REJECTED = '{"e":1}';
 function promiseBoundaries(
   promises: ReturnType<IslandServerHook["encode"]>["promises"],
   label: string,
+  island: string,
 ): React.ReactNode[] {
   return promises.map(({ name, promise }) =>
     React.createElement(
       React.Suspense,
       { key: name, fallback: null },
-      React.createElement(IslandPromise, { name, promise, label }),
+      React.createElement(IslandPromise, { name, promise, label, island }),
     ),
   );
 }
@@ -307,12 +487,17 @@ function IslandPromise({
   name,
   promise,
   label,
+  island,
 }: {
   name: string;
   promise: PromiseLike<unknown>;
   label: string;
+  /** The island's props id, which a `<template>` of the value's slots names. */
+  island: string;
 }) {
   const outcome = React.use(settle(promise));
+  const slotsOf = promiseSlots.get(promise);
+  const slots = outcome.ok && slotsOf ? React.use(slotsOf) : null;
   const state = React.useContext(getContexts().render) ?? resolveRenderState();
   const hook = getIslandServerHook()!;
   let encoded: ReturnType<IslandServerHook["encode"]> = {
@@ -344,13 +529,28 @@ function IslandPromise({
         dangerouslySetInnerHTML: { __html: hook.escape(value.json) },
       }),
     ),
+    // The value's server output, before its outcome: the browser reads a slot from here when the
+    // island did not place it where React wrote the island.
+    slots && slots.elements.size > 0
+      ? React.createElement(
+          SLOT_TEMPLATE_ELEMENT,
+          { key: "slots", htmlFor: island },
+          Array.from(slots.elements.keys(), (slot) =>
+            React.createElement(
+              SLOT_ELEMENT,
+              { key: slot, name: slot, style: slotStyle },
+              slots.trees.get(slot)?.element,
+            ),
+          ),
+        )
+      : null,
     React.createElement("script", {
       key: "outcome",
       type: PROMISE_SCRIPT_TYPE,
       name,
       dangerouslySetInnerHTML: { __html: hook.escape(encoded.json) },
     }),
-    ...promiseBoundaries(encoded.promises, label),
+    ...promiseBoundaries(encoded.promises, label, island),
   );
 }
 
@@ -437,20 +637,12 @@ export function createIsland<P extends object>(
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
     let strategy = declared;
-    const slots: IslandSlots = {
-      next: 0,
-      elements: new Map(),
-      references: new Map(),
-      placed: new Set(),
-      trees: new Map(),
-    };
+    const slots = createSlots(state?.held ?? null);
     const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
     // Server output passed as props resolves first (outside the try: `use` suspends by throwing).
     if (slots.elements.size > 0) {
-      slots.trees = React.use(resolveSlots(props, slots.elements, state?.held ?? null));
-      for (const [name, reference] of slots.references) {
-        if (slots.trees.get(name)?.rebuild) reference[SLOT_TREE_FIELD] = 1;
-      }
+      slots.trees = React.use(resolveSlots(props, slots.elements, slots.held));
+      markSlotReferences(slots);
     }
     try {
       if (options.inferred && slots.next > 0) strategy = "load";
@@ -461,14 +653,13 @@ export function createIsland<P extends object>(
       // An action's sealed values still sealing: React renders this part again once ready.
       if (isThenable(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      const key = `${src}#${exportName}:${message}`;
-      if (!warned.has(key)) {
-        warned.add(key);
-        console.warn(
-          `[islx] ${exportName} (${src}) was rendered without hydration: its props cannot be sent to the browser. ${message}`,
-        );
-      }
-      return React.createElement(Component, props);
+      // React Server Components refuse a prop they cannot send, so a render fails here too.
+      throw new TypeError(
+        `${exportName} (${src}) cannot get its props in the browser: ${message}`,
+        {
+          cause: error,
+        },
+      );
     }
 
     // Where the island's component sits in the page, for its useId calls (see ./ids).
@@ -512,7 +703,7 @@ export function createIsland<P extends object>(
         slots,
         json: hook.escape(encoded.json),
       }),
-      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`),
+      ...promiseBoundaries(encoded.promises, `${exportName} (${src})`, id),
     );
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;

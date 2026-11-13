@@ -15,7 +15,7 @@ islx started as [Farm.js](https://github.com/farming-labs/farm.js)'s islands mod
 replaces React Server Components' Flight payload. On a 300-page docs app it ships 26% less
 JavaScript, and a client navigation sends 2.5 KB instead of 12 KB.
 
-> Status: 0.0.9. React, Vite and TanStack Start are supported; other renderers and framework
+> Status: 0.0.16. React, Vite and TanStack Start are supported; other renderers and framework
 > integrations follow. The wire format is in [SPEC.md](./SPEC.md), changes in
 > [CHANGELOG.md](./CHANGELOG.md).
 
@@ -48,7 +48,7 @@ import { transformActions } from "@farm.js/islx/compiler";
 - **React islands.** `createIsland` renders a client component as server HTML plus its props;
   `renderToStream` renders a page (leaving out values the browser holds); the hydration runtime
   starts each island as its own root when its strategy says (`load`, `idle`, `visible`,
-  `interaction`, which holds the first click or submit and replays it), restores the server HTML
+  `interaction`, which holds each click or submit made while it loads and replays them in order), restores the server HTML
   if an island fails, keeps island state when the page renders again, and hydrates
   `useActionState` with the form post's result.
 - **Compiler.** A pure function from source to source for each environment, with errors that

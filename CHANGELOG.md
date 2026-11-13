@@ -1,5 +1,92 @@
 # Changelog
 
+## 0.0.16
+
+Elements that arrive later render, as under React Server Components.
+
+- A client component given a promise that resolves to elements renders them, client components
+  inside included, and they hydrate. Before, the promise rejected in the browser.
+- A client component that reads a stream prop while rendering on the server gets its own copy of
+  the stream, and elements in its chunks render and hydrate. Before, the server render failed
+  with "ReadableStream is locked".
+- A server action's promises and streams can settle to elements. They render inside the
+  framework's `run`, with the request's context. Before, the browser got a rejection.
+- An island in Suspense content that React reveals after the document is parsed hydrates. React
+  batches reveals, and before, such an island stayed inert.
+
+## 0.0.15
+
+Values that refer to themselves travel, as under React Server Components.
+
+- A client component can receive a prop that refers to itself: a node whose `self` is the node,
+  children that point at their parent, a `Map` or `Set` holding itself. The browser gets the same
+  cycle. Before, the island rendered without hydration and logged a warning.
+- A server action can take and return such values, in its arguments, its result and the promises
+  and streams in it. Before, the call failed with "circular values are not serializable".
+- Wire: a new `C` tag, `{"$":"C","v":levels}`, stands for the object, array, `Map` or `Set` that
+  many levels up. `CIRCULAR_VALUE` is deprecated; nothing throws it now.
+
+## 0.0.14
+
+Islands take what React Server Components send, and refuse what they refuse.
+
+- A client component can receive a `ReadableStream` or an async iterable. Its chunks stream in
+  after the page, as the server reads them, and an error reaches the browser without the
+  server's reason. Before, the island rendered without hydration.
+- A server action can return promises, `ReadableStream`s and async iterables. The call returns
+  first, and they settle as the server resolves them (`application/x-ndjson`). Before, the action
+  ran and then answered 500.
+- A client component given a plain function, a class instance or a symbol fails the render, with
+  an error that names the component and the prop, as under React Server Components. Before, it
+  rendered without hydration and logged a warning. A circular prop still renders without
+  hydration.
+
+## 0.0.13
+
+- The browser keeps at most 1000 server action references, dropping the least recently used. Each
+  action with captured values gets a new reference per render, so a long session kept every one
+  it saw. A reference still in use keeps its identity.
+
+## 0.0.12
+
+Two fixes for frameworks on islx.
+
+- A server action that returns elements, under a framework whose `run` wraps the result, now
+  sends that result wrapped once. Before, the elements rendered through `run` a second time and
+  the browser got the wrapper as the value.
+- The browser's value store keeps the values a page has not used yet when it grows past its
+  limit. It drops the oldest resolved values instead of all of them, so an island that hydrates
+  late still finds its props.
+
+## 0.0.11
+
+Islands behave as React Server Components do in two more cases, and one prop no longer breaks a
+page.
+
+- A server action can return React elements (JSX), alone or inside arrays and plain objects. They
+  render on the server as a server tree, so client components in them are live in the browser and
+  async server components have run. Before, the action ran and then answered 500.
+- A client component that clones its server child (`asChild`, Radix's `Slot`, `cloneElement`)
+  gives its props to that child when the child is one host element, instead of to the `<f-slot>`
+  around it. The child gets the classes, state attributes, handlers and ref, as under React Server
+  Components.
+- An island whose prop refers to itself renders without hydration, with the reason in a warning,
+  as any prop that cannot be sent does. Before, the render overflowed the stack.
+
+## 0.0.10
+
+Islands keep the right state and every click, in three cases they did not.
+
+- An island keeps its state with its item when a list changes after an action or a refresh, as
+  React keys do. Islands whose props did not change keep their live root first; the rest pair up
+  in document order, as before. Before, removing the first item of a list moved its state onto the
+  next one.
+- A streamed island whose props script has not arrived yet waits for it while the page loads,
+  instead of failing, restoring its server HTML and failing again in a loop.
+- Every click made on an `interaction` island while its code loads is replayed, in order, so two
+  clicks on a counter count two. A repeated submit of a form, or click on its submit button, is
+  still held and replayed once.
+
 ## 0.0.9
 
 Islands behave as React Server Components do in four cases they did not.
@@ -108,8 +195,8 @@ Server layouts as trees.
 
 - A server layout around a client provider renders as a server tree, so a framework no longer
   ships the layout's module to hydrate it. On the server, `renderServerTree(layout, { outlets,
-  scope })` with `<Outlet />` where the page goes; in the browser, `createServerTreeLayout(source,
-  scope, { load, ServerHtml, onUpdate })` and `layout.render({ children: page })`. Rendering it
+scope })` with `<Outlet />` where the page goes; in the browser, `createServerTreeLayout(source,
+scope, { load, ServerHtml, onUpdate })` and `layout.render({ children: page })`. Rendering it
   again with another page keeps the provider's state.
 - A layout's tree names its payload, chunks and server HTML by its scope (`f/chunk name="/:0"`),
   so it and the page's tree at its outlet never read each other's parts. New tag `L` (outlet).

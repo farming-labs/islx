@@ -105,9 +105,6 @@ describe("codec", () => {
     expect(error).toBeInstanceOf(EncodeError);
     expect((error as EncodeError).location).toBe("user.roles[2]");
     expect((error as EncodeError).reason).toBe("class instances (Pool) are not serializable");
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-    expect(() => encode(circular)).toThrow("self: circular");
     expect(() => encode({ s: Symbol("x") })).toThrow("symbol values");
   });
 
@@ -121,6 +118,29 @@ describe("codec", () => {
     ).toEqual({
       save: { $: "a", v: "id" },
     });
+  });
+
+  it("carries values that contain themselves, as React Server Components do", () => {
+    const node: Record<string, any> = { name: "root" };
+    node.self = node;
+    node.children = [{ parent: node }];
+    const map = new Map<string, unknown>();
+    map.set("me", map);
+    const set = new Set<unknown>();
+    set.add([set]);
+    const encoded = encode({ node, map, set });
+    expect(encoded).toEqual({
+      node: { name: "root", self: { $: "C", v: 1 }, children: [{ parent: { $: "C", v: 3 } }] },
+      map: { $: "M", v: [["me", { $: "C", v: 1 }]] },
+      set: { $: "S", v: [[{ $: "C", v: 2 }]] },
+    });
+    const back = decode(JSON.parse(JSON.stringify(encoded))) as Record<string, any>;
+    expect(back.node.self).toBe(back.node);
+    expect(back.node.children[0].parent).toBe(back.node);
+    expect(back.map.get("me")).toBe(back.map);
+    expect([...back.set][0][0]).toBe(back.set);
+    expect(() => decode({ a: { $: "C", v: 2 } })).toThrow("cycle");
+    expect(() => decode({ a: { $: "C", v: 0 } })).toThrow("cycle");
   });
 
   it("keeps shared values without treating them as circular", () => {
