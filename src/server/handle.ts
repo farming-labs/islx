@@ -139,10 +139,11 @@ const STALE = { [ACTION_STALE_HEADER]: "1" };
 function decodeArgumentReference(
   object: Record<string, unknown>,
   temporaries: ReturnType<typeof createTemporaryReferences>,
+  decodeBound: (value: unknown) => unknown,
 ): unknown {
   if (object[TAG] === REFERENCE_TAG || object[TAG] === SLOT_TAG) return undefined;
   if (object[TAG] === TEMPORARY_TAG) return temporaries.decode(object[TAG_VALUE]);
-  return decodeActionReference(object);
+  return decodeActionReference(object, decodeBound);
 }
 
 function looksLikeActionForm(head: Uint8Array): boolean {
@@ -203,8 +204,12 @@ export async function handleAction(
     let args: unknown[];
     let token: string | undefined;
     const temporaries = createTemporaryReferences();
+    // The arguments an action argument was bound to in the browser decode like the call's own.
+    let decodeReference = (object: Record<string, unknown>): unknown =>
+      decodeArgumentReference(object, temporaries, decodeBound);
+    const decodeBound = (value: unknown) => decode(value, { decodeReference });
     const decodeArgument = (object: Record<string, unknown>) =>
-      decodeArgumentReference(object, temporaries);
+      decodeArgumentReference(object, temporaries, decodeBound);
     try {
       const form = contentType.startsWith("multipart/form-data")
         ? await parseForm(request, body)
@@ -221,7 +226,7 @@ export async function handleAction(
         const payload = JSON.parse(call as string) as { a?: unknown; b?: unknown };
         if (!payload || typeof payload !== "object" || Array.isArray(payload))
           throw new TypeError();
-        const decodeReference = (object: Record<string, unknown>) => {
+        decodeReference = (object: Record<string, unknown>) => {
           const index = object[TAG_VALUE];
           if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return undefined;
           if (object[TAG] === BLOB_TAG) {

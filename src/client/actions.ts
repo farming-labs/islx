@@ -7,7 +7,7 @@
  * action navigates instead. An action this server no longer knows, as after a deploy, reloads the
  * page.
  */
-import { decode, encode } from "../protocol/codec";
+import { decode, encode, type EncodeOptions } from "../protocol/codec";
 import { emit } from "./hooks";
 import { readStreamedResult } from "./result-stream";
 import {
@@ -23,6 +23,7 @@ import {
   attachmentField,
   TAG,
   TAG_BOUND,
+  TAG_BROWSER_BOUND,
   TAG_VALUE,
   TEMPORARY_TAG,
   getTag,
@@ -97,16 +98,29 @@ export function setActionInterceptor(interceptor: ActionInterceptor | undefined)
   state().interceptor = interceptor;
 }
 
-/** Encodes an action passed back to the server as an argument. */
-function encodeFunction(value: Function): unknown {
-  const reference = state().info.get(value);
-  if (!reference) return undefined;
-  if (reference.bound.length > 0) {
-    throw new TypeError("an action bound in the browser cannot be sent to the server");
-  }
-  return reference.token === undefined
-    ? { [TAG]: ACTION_TAG, [TAG_VALUE]: reference.id }
-    : { [TAG]: ACTION_TAG, [TAG_VALUE]: reference.id, [TAG_BOUND]: reference.token };
+/**
+ * Encodes an action passed back to the server as an argument, with the arguments it was bound to
+ * in the browser (`c`), encoded as the call's own.
+ */
+function createFunctionEncoder(options: () => EncodeOptions): (value: Function) => unknown {
+  const encoding = new Set<ClientReference>();
+  return (value) => {
+    const reference = state().info.get(value);
+    if (!reference) return undefined;
+    const json: Record<string, unknown> = { [TAG]: ACTION_TAG, [TAG_VALUE]: reference.id };
+    if (reference.token !== undefined) json[TAG_BOUND] = reference.token;
+    if (reference.bound.length === 0) return json;
+    if (encoding.has(reference)) {
+      throw new TypeError("an action bound in the browser to a value that holds it cannot be sent");
+    }
+    encoding.add(reference);
+    try {
+      json[TAG_BROWSER_BOUND] = encode(reference.bound, options());
+    } finally {
+      encoding.delete(reference);
+    }
+    return json;
+  };
 }
 
 /** Decodes an action in a result or props: `{"$":"a","v":id,"b"?:sealed}`. */
@@ -220,8 +234,13 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
       }
       return undefined;
     };
+    const options: EncodeOptions = {
+      encodeFunction: createFunctionEncoder(() => options),
+      encodeObject,
+      encodeTemporary,
+    };
     const json = JSON.stringify({
-      a: encode(all, { encodeFunction, encodeObject, encodeTemporary }),
+      a: encode(all, options),
       b: reference.token,
     });
     if (attachments.length === 0) {
