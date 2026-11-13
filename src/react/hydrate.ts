@@ -10,6 +10,7 @@ import { emit } from "../client/hooks";
 import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
+import { fromStreamSteps, type StreamStep } from "../protocol/stream";
 import {
   HTML_ELEMENT,
   ACTION_TAG,
@@ -19,6 +20,8 @@ import {
   ISLAND_ELEMENT,
   PROMISE_SCRIPT_TYPE,
   PROMISE_TAG,
+  STREAM_KIND_FIELD,
+  STREAM_TAG,
   PROPS_SCRIPT_TYPE,
   REFERENCE_TAG,
   SLOT_ELEMENT,
@@ -266,6 +269,14 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
   }
   if (tag === PROMISE_TAG && typeof object[TAG_VALUE] === "string") {
     return islandPromise(object[TAG_VALUE], container, values);
+  }
+  if (tag === STREAM_TAG && typeof object[TAG_VALUE] === "string") {
+    const kind = object[STREAM_KIND_FIELD];
+    if (kind !== "r" && kind !== "i" && kind !== "t") throw new TypeError("malformed islx stream");
+    return fromStreamSteps(
+      islandPromise(object[TAG_VALUE], container, values) as PromiseLike<StreamStep>,
+      kind,
+    );
   }
   if (tag === REFERENCE_TAG)
     throw new Error(`islx value ${String(object[TAG_VALUE])} was not resolved`);

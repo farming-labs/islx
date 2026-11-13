@@ -81,6 +81,15 @@ export const ACTION_TAG = "a";
  * (Inside a server tree, `{"$":"P","v":value}` is a promise that resolved already.)
  */
 export const PROMISE_TAG = "T";
+/**
+ * `{"$":"W","v":name,"k":kind}`: a stream an island receives (`k`: `r` a `ReadableStream`, `i` an
+ * async iterable, `t` an async iterator). `name` is a promise (see `PROMISE_TAG`) of its first
+ * step: `{"v":chunk,"n":next}`, where `next` is the promise of the step after, or `{"d":1}` at the
+ * end, with the iterator's return value as `v`.
+ */
+export const STREAM_TAG = "W";
+/** On a stream: its kind. */
+export const STREAM_KIND_FIELD = "k";
 /** `{"$":"o","v":{…}}`: app data that has its own `$` key. */
 export const OBJECT_TAG = "o";
 /** `{"$":"F","v":n}`: a `FormData` argument, sent as fields of a multipart call. */
@@ -176,6 +185,9 @@ export function getTag(value: unknown): string | undefined {
     TAG_VALUE in value &&
     (SLOT_TREE_FIELD in value || SLOT_HOST_FIELD in value)
   ) {
+    return tag;
+  }
+  if (keys.length === 3 && tag === STREAM_TAG && TAG_VALUE in value && STREAM_KIND_FIELD in value) {
     return tag;
   }
   return undefined;

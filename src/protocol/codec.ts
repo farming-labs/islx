@@ -22,6 +22,7 @@ import {
   FORM_DATA_TAG,
   OBJECT_TAG,
   PROMISE_TAG,
+  STREAM_TAG,
   REFERENCE_TAG,
   ELEMENT_TAG,
   SLOT_TAG,
@@ -156,6 +157,7 @@ export function decodeTagged(
     case FORM_DATA_TAG:
     case BLOB_TAG:
     case PROMISE_TAG:
+    case STREAM_TAG:
       return NOT_A_VALUE;
     case OBJECT_TAG:
       if (data && typeof data === "object" && !Array.isArray(data)) {

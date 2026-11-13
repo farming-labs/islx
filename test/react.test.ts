@@ -744,6 +744,100 @@ describe("promises in islands", () => {
   });
 });
 
+describe("streams in islands", () => {
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const stream = <T>(chunks: T[], failAt?: number) =>
+    new ReadableStream<T>({
+      async start(controller) {
+        for (const [index, chunk] of chunks.entries()) {
+          await tick();
+          if (index === failAt) return controller.error(new Error("disk on fire"));
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+  async function* generate<T>(chunks: T[]) {
+    for (const chunk of chunks) {
+      await tick();
+      yield chunk;
+    }
+    return "end";
+  }
+  async function readAll(value: unknown): Promise<unknown[]> {
+    const chunks: unknown[] = [];
+    if (value instanceof ReadableStream) {
+      const reader = value.getReader();
+      for (let read = await reader.read(); !read.done; read = await reader.read()) {
+        chunks.push(read.value);
+      }
+      return chunks;
+    }
+    for await (const chunk of value as AsyncIterable<unknown>) chunks.push(chunk);
+    return chunks;
+  }
+  // The props the browser hydrated the island with.
+  async function hydratedValue(markup: string) {
+    received.length = 0;
+    await mount(markup);
+    return received[0] as unknown;
+  }
+
+  it("arrive as a ReadableStream the browser reads chunk by chunk, as React Server Components send them", async () => {
+    const markup = await html(
+      h(KeepsIsland, { value: stream(["a", { b: new Date(0) }, new Uint8Array([1, 2])]) as never }),
+    );
+    expect(markup).toMatch(/\{"value":\{"\$":"W","v":"[^"]+","k":"r"\}\}/);
+    const value = await hydratedValue(markup);
+    expect(value).toBeInstanceOf(ReadableStream);
+    expect(await readAll(value)).toEqual(["a", { b: new Date(0) }, new Uint8Array([1, 2])]);
+  });
+
+  it("arrive as an async iterable, or as the iterator a generator is", async () => {
+    const iterable = { [Symbol.asyncIterator]: () => generate([1, 2]) };
+    const value = await hydratedValue(await html(h(KeepsIsland, { value: iterable as never })));
+    expect(value).not.toBeInstanceOf(ReadableStream);
+    expect(await readAll(value)).toEqual([1, 2]);
+    // An iterable can be read again, from the start.
+    expect(await readAll(value)).toEqual([1, 2]);
+
+    const iterator = (await hydratedValue(
+      await html(h(KeepsIsland, { value: generate(["x", "y"]) as never })),
+    )) as AsyncIterator<string, string>;
+    expect(await iterator.next()).toEqual({ value: "x", done: false });
+    expect(await iterator.next()).toEqual({ value: "y", done: false });
+    expect(await iterator.next()).toEqual({ value: "end", done: true });
+  });
+
+  it("deliver the chunks that stream in after the island hydrated", async () => {
+    const markup = await html(h(KeepsIsland, { value: stream(["early", "late"]) as never }));
+    const outcomes = [...markup.matchAll(/<script type="f\/promise"[^>]*>.*?<\/script>/g)].map(
+      (match) => match[0],
+    );
+    expect(outcomes).toHaveLength(3);
+    const value = await hydratedValue(
+      outcomes.reduce((page, outcome) => page.replace(outcome, ""), markup),
+    );
+    const reading = readAll(value);
+    await act(async () => {
+      for (const outcome of outcomes) {
+        document.body.insertAdjacentHTML("beforeend", outcome);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+    expect(await reading).toEqual(["early", "late"]);
+  });
+
+  it("error in the browser after the chunks before the failure, without the server's reason", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const markup = await html(h(KeepsIsland, { value: stream(["ok", "never"], 1) as never }));
+    expect(markup).not.toContain("disk on fire");
+    const reader = ((await hydratedValue(markup)) as ReadableStream<string>).getReader();
+    expect(await reader.read()).toEqual({ value: "ok", done: false });
+    await expect(reader.read()).rejects.toThrow("rejected on the server");
+  });
+});
+
 describe("islands in a page that streams after it loaded (a navigation)", () => {
   // The island's shell, with its Suspense boundary still waiting, and the rest of the stream.
   async function shell() {

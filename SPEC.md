@@ -51,28 +51,29 @@ A tagged object is `{"$":tag}` or `{"$":tag,"v":data}`; an action may also carry
 host element. A client component that clones such a slot (`asChild`) gives its props to that element,
 whose own props are `p`. An object with any other keys is data.
 
-| Tag | Stands for                                             | Data                                                                                                              |
-| --- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `r` | a value sent once                                      | its key                                                                                                           |
-| `s` | a slot                                                 | its name                                                                                                          |
-| `a` | a server action                                        | its id; `b`, when present, holds its sealed captured values                                                       |
-| `x` | React elements a server action returned (results only) | `{"s":scope,"h":html}`: their server HTML, with the server tree named `scope` that the browser rebuilds them from |
-| `o` | app data with a `$` key                                | the object                                                                                                        |
-| `u` | `undefined`                                            |                                                                                                                   |
-| `n` | `NaN`, `Infinity`, `-Infinity`, `-0`                   | the name                                                                                                          |
-| `B` | `BigInt`                                               | decimal digits                                                                                                    |
-| `D` | `Date`                                                 | ISO string, `null` for an invalid date                                                                            |
-| `M` | `Map`                                                  | `[[key, value], …]`, both tagged                                                                                  |
-| `S` | `Set`                                                  | `[value, …]`, tagged                                                                                              |
-| `U` | `URL`                                                  | `href`                                                                                                            |
-| `R` | `RegExp`                                               | `[source, flags]`                                                                                                 |
-| `Y` | bytes                                                  | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name                                         |
-| `T` | a promise an island receives                           | its name; its outcome arrives in the `f/promise` script of that name                                              |
-| `P` | a promise inside a server tree, resolved already       | its value, tagged                                                                                                 |
-| `p` | a Suspense boundary inside a server tree               |                                                                                                                   |
-| `L` | a layout tree's outlet, where the page renders         | `n`: the outlet's name, `children` for the page                                                                   |
-| `F` | a `FormData` action argument                           | its index among the call's attachments                                                                            |
-| `K` | a `Blob` or `File` action argument                     | its index among the call's attachments                                                                            |
+| Tag | Stands for                                                                 | Data                                                                                                                                                                    |
+| --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r` | a value sent once                                                          | its key                                                                                                                                                                 |
+| `s` | a slot                                                                     | its name                                                                                                                                                                |
+| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values                                                                                                             |
+| `x` | React elements a server action returned (results only)                     | `{"s":scope,"h":html}`: their server HTML, with the server tree named `scope` that the browser rebuilds them from                                                       |
+| `o` | app data with a `$` key                                                    | the object                                                                                                                                                              |
+| `u` | `undefined`                                                                |                                                                                                                                                                         |
+| `n` | `NaN`, `Infinity`, `-Infinity`, `-0`                                       | the name                                                                                                                                                                |
+| `B` | `BigInt`                                                                   | decimal digits                                                                                                                                                          |
+| `D` | `Date`                                                                     | ISO string, `null` for an invalid date                                                                                                                                  |
+| `M` | `Map`                                                                      | `[[key, value], …]`, both tagged                                                                                                                                        |
+| `S` | `Set`                                                                      | `[value, …]`, tagged                                                                                                                                                    |
+| `U` | `URL`                                                                      | `href`                                                                                                                                                                  |
+| `R` | `RegExp`                                                                   | `[source, flags]`                                                                                                                                                       |
+| `Y` | bytes                                                                      | `[type, base64]`; type is `ArrayBuffer`, `DataView` or a typed array name                                                                                               |
+| `T` | a promise an island receives                                               | its name; its outcome arrives in the `f/promise` script of that name                                                                                                    |
+| `W` | a stream an island receives (`ReadableStream`, async iterable or iterator) | its first step's promise name, and `k`: `r`, `i` or `t`; each step is `{"v":chunk,"n":next promise}`, or `{"d":1}` at the end (with the iterator's return value as `v`) |
+| `P` | a promise inside a server tree, resolved already                           | its value, tagged                                                                                                                                                       |
+| `p` | a Suspense boundary inside a server tree                                   |                                                                                                                                                                         |
+| `L` | a layout tree's outlet, where the page renders                             | `n`: the outlet's name, `children` for the page                                                                                                                         |
+| `F` | a `FormData` action argument                                               | its index among the call's attachments                                                                                                                                  |
+| `K` | a `Blob` or `File` action argument                                         | its index among the call's attachments                                                                                                                                  |
 
 The browser resolves `r` first (from its value store), then decodes the rest. Inside `o`, only
 the object's properties are read; the object itself is never a tag. Unknown tags are errors.

@@ -12,6 +12,7 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
+import { getStreamKind } from "../protocol/stream";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
@@ -285,6 +286,8 @@ function splitSlots(
   if (value && typeof value === "object") {
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
+    // A plain object that is an async iterable travels as a stream, symbol key and all.
+    if (getStreamKind(value)) return { render: value, wire: value };
     ancestors.add(value);
     const render: Record<string, unknown> = {};
     const wire: Record<string, unknown> = {};
