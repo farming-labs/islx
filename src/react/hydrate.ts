@@ -978,9 +978,9 @@ export function createHydrationRuntime(options: HydrationOptions) {
    */
   let watching = false;
   function watchStream(document: Document): void {
-    if (watching || document.readyState !== "loading" || typeof MutationObserver !== "function") {
-      return;
-    }
+    if (watching || typeof MutationObserver !== "function") return;
+    // React batches reveals, so staged content can still wait once the document is parsed.
+    if (document.readyState !== "loading" && !document.querySelector(STREAM_STAGING)) return;
     watching = true;
     const removed = new Set<Node>();
     let queued = false;
