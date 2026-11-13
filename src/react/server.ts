@@ -284,6 +284,33 @@ function renderInResult(value: unknown, render: ResultRender, pending: Promise<v
     });
     return copy;
   }
+  // A map's or set's entries render in order, keys too, once each is ready.
+  if (value instanceof Map || value instanceof Set) {
+    const copy = value instanceof Map ? new Map<unknown, unknown>() : new Set<unknown>();
+    render.copies.set(value, copy);
+    const entries: unknown[][] = Array.from(
+      value instanceof Map ? value : value.values(),
+      (entry) => (value instanceof Map ? (entry as [unknown, unknown]).slice() : [entry]),
+    );
+    const filling: Promise<void>[] = [];
+    for (const entry of entries) {
+      entry.forEach((part, index) => {
+        const rendered = renderInResult(part, render, pending);
+        if (rendered instanceof RenderingElements) {
+          filling.push(rendered.done.then((done) => void (entry[index] = done)));
+        } else entry[index] = rendered;
+      });
+    }
+    const add = () => {
+      for (const entry of entries) {
+        if (copy instanceof Map) copy.set(entry[0], entry[1]);
+        else copy.add(entry[0]);
+      }
+    };
+    if (filling.length === 0) add();
+    else pending.push(Promise.all(filling).then(add));
+    return copy;
+  }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return value;
   const copy = Object.create(prototype) as Record<string, unknown>;

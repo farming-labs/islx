@@ -3,6 +3,7 @@ import {
   Suspense,
   act,
   cloneElement,
+  isValidElement,
   createContext,
   useContext,
   createElement as h,
@@ -693,6 +694,32 @@ describe("islands", () => {
     expect(errors()).toEqual([]);
   });
 
+  it("render elements inside a map or set prop, with live client components, as React Server Components do", async () => {
+    const errors = spyErrors();
+    function Panels({ panels, marks }: { panels: Map<string, ReactNode>; marks: Set<ReactNode> }) {
+      return h("div", { "data-panels": "" }, panels.get("main"), ...marks);
+    }
+    modules["/src/panels.tsx"] = { Panels };
+    const PanelsIsland = createIsland(Panels, "/src/panels.tsx", "Panels");
+    const markup = await html(
+      h(PanelsIsland, {
+        panels: new Map([["main", h(CounterIsland, { start: 1, label: "panel" })]]),
+        marks: new Set([h("i", { key: "m" }, "marked")]),
+      }),
+    );
+    expect(markup).toContain("panel 1");
+    await mount(markup);
+    expect(document.querySelector('[data-panels] [data-counter="panel"]')!.textContent).toBe(
+      "panel 1",
+    );
+    expect(document.querySelector("[data-panels] i")!.textContent).toBe("marked");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="panel"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="panel"]')!.textContent).toBe("panel 2");
+    expect(errors()).toEqual([]);
+  });
+
   it("give a stream prop's chunks to the server render too, elements included", async () => {
     const errors = spyErrors();
     const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -1299,6 +1326,34 @@ describe("actions in islands", () => {
     expect(await holder.later).toBe(holder);
     const reader = holder.chunks!.getReader();
     expect((await reader.read()).value!.holder).toBe(holder);
+  });
+
+  it("render elements and promises inside a map or set an action returns, as React Server Components do", async () => {
+    const make = async () => ({
+      byName: new Map<string, unknown>([
+        ["now", h("em", null, "in a map")],
+        ["later", Promise.resolve(h("b", null, "later"))],
+      ]),
+      marks: new Set<unknown>([h("i", null, "in a set")]),
+    });
+    registerServerReference(make, "island-map-set-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-map-set-result")()) as {
+      byName: Map<string, unknown>;
+      marks: Set<unknown>;
+    };
+    expect([...result.byName.keys()]).toEqual(["now", "later"]);
+    expect(isValidElement(result.byName.get("now"))).toBe(true);
+    expect(isValidElement(await result.byName.get("later"))).toBe(true);
+    expect([...result.marks].map((mark) => isValidElement(mark))).toEqual([true]);
   });
 
   it("render the elements an action returns inside the framework's run, once", async () => {
