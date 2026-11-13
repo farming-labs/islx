@@ -12,6 +12,7 @@
  *   /ab+c/gi                  {"$":"R","v":["ab+c","gi"]}
  *   Uint8Array, ArrayBuffer…  {"$":"Y","v":["Uint8Array","base64…"]}
  *   app data with a "$" key   {"$":"o","v":{…}}                          (never read as a tag)
+ *   a value inside itself     {"$":"C","v":2}            (levels up: objects, arrays, maps, sets)
  *
  * Decoding accepts input from the browser (server action arguments): it builds plain objects
  * without assigning `__proto__`, and rejects unknown or malformed tags.
@@ -273,11 +274,13 @@ export interface EncodeOptions {
 
 /**
  * Encodes a value for JSON with the tags above: plain objects, arrays and the types listed.
- * Symbols, class instances, circular values and (without `encodeFunction`) functions throw an
- * `EncodeError` that names where the value sits.
+ * A value inside itself travels as a cycle reference. Symbols, class instances and (without
+ * `encodeFunction`) functions throw an `EncodeError` that names where the value sits.
  */
 export function encode(value: unknown, options: EncodeOptions = {}): unknown {
-  const seen = new Set<object>();
+  // The objects, arrays, maps and sets above the value, by depth: one met again inside itself
+  // travels as the number of levels up to it, as React Server Components send it.
+  const depths = new Map<object, number>();
   const path: (string | number)[] = [...(options.path ?? [])];
   const fail = (reason: string): never => {
     throw new EncodeError(reason, path);
@@ -292,8 +295,9 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
       return encoded === undefined ? fail("functions are not serializable") : encoded;
     }
     if (typeof value !== "object") return fail(`${typeof value} values are not serializable`);
-    if (seen.has(value)) return fail("circular values are not serializable");
-    seen.add(value);
+    const depth = depths.get(value);
+    if (depth !== undefined) return tagged(CYCLE_TAG, depths.size - depth);
+    depths.set(value, depths.size);
     try {
       if (Array.isArray(value)) {
         return value.map((entry, index) => {
@@ -356,7 +360,7 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
       );
       return needsObjectTag(value) ? tagged(OBJECT_TAG, encoded) : encoded;
     } finally {
-      seen.delete(value);
+      depths.delete(value);
     }
   };
   return visit(value);
@@ -371,13 +375,57 @@ export interface DecodeOptions {
   decodeReference?: (object: Record<string, unknown>) => unknown;
 }
 
+/**
+ * The container a cycle reference (`{"$":"C","v":levels}`) names among `ancestors`, the objects,
+ * arrays, maps and sets above it, outermost first. Throws for a reference that names none.
+ */
+export function resolveCycle(ancestors: readonly unknown[], levels: unknown): unknown {
+  const index = ancestors.length - (levels as number);
+  if (!Number.isInteger(levels) || (levels as number) < 1 || index < 0) {
+    throw new TypeError("malformed cycle reference");
+  }
+  return ancestors[index];
+}
+
 /** Decodes what `encode` produced, after `JSON.parse`. Reference tags are rejected by default. */
 export function decode(value: unknown, options: DecodeOptions = {}): unknown {
+  // Containers exist before their contents, so a cycle reference inside can name them.
+  const ancestors: unknown[] = [];
+  const fill = <T>(into: T, add: (into: T) => void): T => {
+    ancestors.push(into);
+    try {
+      add(into);
+    } finally {
+      ancestors.pop();
+    }
+    return into;
+  };
   const visit = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(visit);
+    if (Array.isArray(value)) {
+      return fill([] as unknown[], (into) => {
+        for (const entry of value) into.push(visit(entry));
+      });
+    }
     if (!value || typeof value !== "object") return value;
     if (getTag(value) !== undefined) {
       const object = value as Record<string, unknown>;
+      const data = object[TAG_VALUE];
+      if (object[TAG] === CYCLE_TAG) return resolveCycle(ancestors, data);
+      if (object[TAG] === "M" && isPairs(data)) {
+        return fill(new Map(), (map) => {
+          for (const [key, entry] of data) map.set(visit(key), visit(entry));
+        });
+      }
+      if (object[TAG] === "S" && Array.isArray(data)) {
+        return fill(new Set(), (set) => {
+          for (const entry of data) set.add(visit(entry));
+        });
+      }
+      if (object[TAG] === OBJECT_TAG && data && typeof data === "object" && !Array.isArray(data)) {
+        return fill({} as Record<string, unknown>, (into) => {
+          for (const [key, entry] of Object.entries(data)) setOwn(into, key, visit(entry));
+        });
+      }
       const decoded = decodeTagged(object, visit);
       if (decoded !== NOT_A_VALUE) return decoded;
       const reference = options.decodeReference?.(object);
@@ -385,7 +433,13 @@ export function decode(value: unknown, options: DecodeOptions = {}): unknown {
       throw new TypeError(`a ${JSON.stringify(object[TAG])} reference is not allowed here`);
     }
     if (needsObjectTag(value)) throw new TypeError('malformed "$" tag');
-    return plainObject(Object.entries(value).map(([key, entry]) => [key, visit(entry)]));
+    return fill({} as Record<string, unknown>, (into) => {
+      for (const [key, entry] of Object.entries(value)) setOwn(into, key, visit(entry));
+    });
   };
   return visit(value);
+}
+
+function isPairs(data: unknown): data is Array<[unknown, unknown]> {
+  return Array.isArray(data) && data.every((entry) => Array.isArray(entry) && entry.length === 2);
 }

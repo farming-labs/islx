@@ -121,3 +121,31 @@ describe("an action's result", () => {
     expect(String(onError.mock.calls)).toContain("hunter2");
   });
 });
+
+describe("an action's arguments and result", () => {
+  it("keep values that contain themselves, as React Server Components do", async () => {
+    type Node = { name: string; self?: Node; children: Array<{ parent: Node }> };
+    const echo = async (node: Node) => {
+      expect(node.self).toBe(node);
+      expect(node.children[0]!.parent).toBe(node);
+      const reply: Node = { name: `${node.name}!`, children: [] };
+      reply.self = reply;
+      reply.children.push({ parent: reply });
+      return { reply, later: Promise.resolve(reply) };
+    };
+    registerServerReference(echo, "cycle-echo");
+    serve();
+    const node: Node = { name: "root", children: [] };
+    node.self = node;
+    node.children.push({ parent: node });
+    const { reply, later } = (await createServerReference("cycle-echo")(node)) as {
+      reply: Node;
+      later: Promise<Node>;
+    };
+    expect(reply.name).toBe("root!");
+    expect(reply.self).toBe(reply);
+    expect(reply.children[0]!.parent).toBe(reply);
+    const settled = await later;
+    expect(settled.self).toBe(settled);
+  });
+});
