@@ -151,7 +151,7 @@ A single `FormData` argument is sent as `multipart/form-data` instead, with the 
 the `$F_BOUND` field. Arguments that hold `FormData` or files anywhere (as `useActionState`'s
 `(previousState, formData)`) are sent as multipart too: the JSON goes in the `$F_CALL` field,
 attachment `n` is `{"$":"F","v":n}` or `{"$":"K","v":n}` in it, a file travels as field `$F_n`
-and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server.
+and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server. Elements in a settled value travel as `x`, rendered when the value settles.
 Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
 registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
 page after each one (a redirect navigates instead).

@@ -33,11 +33,13 @@ export interface StreamedResult {
 
 /**
  * The result's first line, once it arrives; the rest keeps arriving. `decodeReference` decodes
- * the runtime's other tags in settled values (actions).
+ * the runtime's other tags in settled values (actions), and `reviveElements` rebuilds the elements
+ * in a settled value first.
  */
 export async function readStreamedResult(
   response: Response,
   decodeReference: (object: Record<string, unknown>) => unknown,
+  reviveElements: (value: unknown) => Promise<Map<object, unknown>>,
 ): Promise<StreamedResult> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -84,8 +86,13 @@ export async function readStreamedResult(
     }
     return undefined;
   };
-  const decodeSettled = (value: unknown) =>
-    decode(value, { decodeReference: (object) => reference(object) ?? decodeReference(object) });
+  const decodeSettled = async (value: unknown) => {
+    const elements = await reviveElements(value);
+    return decode(value, {
+      decodeReference: (object) =>
+        elements.get(object) ?? reference(object) ?? decodeReference(object),
+    });
+  };
 
   const first = await nextLine();
   const payload = JSON.parse(first ?? "{}") as StreamedResult["payload"];
@@ -101,7 +108,8 @@ export async function readStreamedResult(
           continue;
         }
         try {
-          settling.resolve((decodeSettled(message.v) as { v: unknown }).v);
+          // In order: a stream's next step settles after the chunk before it.
+          settling.resolve(((await decodeSettled(message.v)) as { v: unknown }).v);
         } catch (error) {
           settling.reject(error);
         }

@@ -3,7 +3,7 @@
  * server code they need (values, action references); `renderToStream` renders a page.
  */
 import * as React from "react";
-import { getStreamKind, toStreamSteps } from "../protocol/stream";
+import { fromStreamSteps, getStreamKind, toStreamSteps, type StreamStep } from "../protocol/stream";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
 import { encode, plainObject } from "../protocol/codec";
 import {
@@ -209,6 +209,11 @@ async function renderResultElements(element: React.ReactElement): Promise<Render
 async function renderInResult(value: unknown, ancestors: Set<object>): Promise<{ value: unknown }> {
   if (React.isValidElement(value)) return { value: await renderResultElements(value) };
   if (!value || typeof value !== "object" || ancestors.has(value)) return { value };
+  // What a promise or a stream settles to renders as it settles. The callbacks are attached here,
+  // inside the framework's `run`, so they render with the request's context too.
+  if (isThenable(value)) return { value: Promise.resolve(value).then(renderResult) };
+  const kind = getStreamKind(value);
+  if (kind) return { value: fromStreamSteps(renderSteps(toStreamSteps(value, kind)), kind) };
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
@@ -233,6 +238,14 @@ async function renderInResult(value: unknown, ancestors: Set<object>): Promise<{
 }
 
 const renderResult = async (value: unknown) => (await renderInResult(value, new Set())).value;
+
+/** Each step's chunk and return value, rendered. Steps are read as they arrive, as before. */
+function renderSteps(steps: PromiseLike<StreamStep>): Promise<StreamStep> {
+  return Promise.resolve(steps).then(async (step): Promise<StreamStep> => {
+    if (!("d" in step)) return { v: await renderResult(step.v), n: renderSteps(step.n) };
+    return step.v === undefined ? step : { d: 1, v: await renderResult(step.v) };
+  });
+}
 
 setActionResultRenderer(renderResult);
 
