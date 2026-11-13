@@ -1262,6 +1262,45 @@ describe("actions in islands", () => {
     expect(await result.ticks.next()).toEqual({ value: 1, done: false });
   });
 
+  it("keep a result's cycles through promises and to itself while its elements render", async () => {
+    type Holder = {
+      name: string;
+      self?: Holder;
+      later?: Promise<Holder>;
+      note?: ReactNode;
+      chunks?: ReadableStream<{ holder: Holder }>;
+    };
+    const hold = async () => {
+      const holder: Holder = { name: "holder", note: h("em", null, "noted") };
+      holder.self = holder;
+      holder.later = Promise.resolve(holder);
+      let sent = false;
+      holder.chunks = new ReadableStream({
+        pull(controller) {
+          if (sent) return controller.close();
+          sent = true;
+          controller.enqueue({ holder });
+        },
+      });
+      return holder;
+    };
+    registerServerReference(hold, "island-hold-cycles");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const holder = (await createServerReference("island-hold-cycles")()) as Holder;
+    expect(holder.self).toBe(holder);
+    expect(await holder.later).toBe(holder);
+    const reader = holder.chunks!.getReader();
+    expect((await reader.read()).value!.holder).toBe(holder);
+  });
+
   it("render the elements an action returns inside the framework's run, once", async () => {
     const runs = vi.fn();
     const label = async () => h("em", { "data-label": "" }, "labelled");
