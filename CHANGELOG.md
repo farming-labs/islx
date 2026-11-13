@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.15
+
+Values that refer to themselves travel, as under React Server Components.
+
+- A client component can receive a prop that refers to itself: a node whose `self` is the node,
+  children that point at their parent, a `Map` or `Set` holding itself. The browser gets the same
+  cycle. Before, the island rendered without hydration and logged a warning.
+- A server action can take and return such values, in its arguments, its result and the promises
+  and streams in it. Before, the call failed with "circular values are not serializable".
+- Wire: a new `C` tag, `{"$":"C","v":levels}`, stands for the object, array, `Map` or `Set` that
+  many levels up. `CIRCULAR_VALUE` is deprecated; nothing throws it now.
+
 ## 0.0.14
 
 Islands take what React Server Components send, and refuse what they refuse.
