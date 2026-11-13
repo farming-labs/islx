@@ -11,6 +11,8 @@ Elements that arrive later render, as under React Server Components.
   with "ReadableStream is locked".
 - A server action's promises and streams can settle to elements. They render inside the
   framework's `run`, with the request's context. Before, the browser got a rejection.
+- An island in Suspense content that React reveals after the document is parsed hydrates. React
+  batches reveals, and before, such an island stayed inert.
 
 ## 0.0.15
 
