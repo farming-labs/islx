@@ -43,6 +43,9 @@ export const PROMISE_SCRIPT_TYPE = "f/promise";
 /** The script type of React's form state after a `useActionState` form post, for hydration. */
 export const FORM_STATE_SCRIPT_TYPE = "f/form-state";
 
+/** The `code` of the error a circular value throws while its props are encoded. */
+export const CIRCULAR_VALUE = "ISLX_CIRCULAR_VALUE";
+
 /** The reserved JSON key whose value is a tag. */
 export const TAG = "$";
 /** The key of a tagged object's data. */

@@ -535,13 +535,18 @@ describe("islands", () => {
     expect(document.querySelector("[data-body=c]")!.textContent).toBe("c body");
   });
 
-  it("render without hydrating when props cannot travel, and say why", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const markup = await html(
-      h(ShowsIsland, { at: new Date(0), tags: [], id: 1, onPick: () => {} }),
-    );
-    expect(markup).not.toContain("<f-island");
-    expect(warn.mock.calls[0]![0]).toContain("functions are not serializable");
+  it("refuse to render an island whose props cannot be sent, as React Server Components do", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const onPick = () => {};
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: 1, onPick })),
+    ).rejects.toThrow(/Shows \(\/src\/shows\.tsx\).*functions are not serializable \(onPick\)/);
+    class Point {
+      x = 1;
+    }
+    await expect(
+      html(h(ShowsIsland, { at: new Date(0), tags: [], id: new Point() })),
+    ).rejects.toThrow("Shows (/src/shows.tsx)");
   });
 
   it("render without hydrating when a prop refers to itself, instead of overflowing", async () => {

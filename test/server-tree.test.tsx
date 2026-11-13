@@ -307,7 +307,7 @@ describe("server tree pages", () => {
     expect(container.querySelector("#page")!.textContent).toBe("tree:open");
   });
 
-  it("keeps a client component whose props do not serialize as server HTML", async () => {
+  it("refuses a client component whose props cannot be sent, as React Server Components do", async () => {
     async function Page() {
       return (
         <>
@@ -316,13 +316,10 @@ describe("server tree pages", () => {
         </>
       );
     }
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const html = await renderPage(<Page />);
-    expect(html).toMatch(/<f-html[^>]*><button id="callback"/);
-    const { container, errors } = await hydratePage(html);
-    expect(errors).toEqual([]);
-    await click(container, "#header");
-    expect(container.querySelector("#page")!.textContent).toBe("tree:open");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(renderPage(<Page />)).rejects.toThrow(
+      "Callback (/src/callback.tsx) cannot get its props in the browser",
+    );
   });
 
   it("wraps the nearest element outside a table when a cell cannot be represented", async () => {

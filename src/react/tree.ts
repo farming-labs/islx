@@ -9,8 +9,9 @@
  * layout's root, so the page's client components hydrate as the layout's descendants.
  *
  * Anything the resolver cannot represent (a server component that calls hooks, a class component,
- * a client component whose props do not serialize, an unknown element type) renders as server
- * HTML inside `<f-html>`, whose own client components hydrate as islands.
+ * an unknown element type) renders as server HTML inside `<f-html>`, whose own client components
+ * hydrate as islands. A client component whose props cannot be sent fails the render there, as
+ * under React Server Components.
  */
 import * as React from "react";
 import { NOT_A_VALUE, decodeTagged, encodeLeaf } from "../protocol/codec";
