@@ -9,7 +9,7 @@ import { createServerReference, setActionElementReviver } from "../client/action
 import { emit } from "../client/hooks";
 import type { IslandStrategy, scheduleHydration } from "../client/schedule";
 import { getValueStore, type ValueStore } from "../client/value-store";
-import { NOT_A_VALUE, decode, decodeTagged, setOwn } from "../protocol/codec";
+import { NOT_A_VALUE, decode, decodeTagged, resolveCycle, setOwn } from "../protocol/codec";
 import { fromStreamSteps, type StreamStep } from "../protocol/stream";
 import {
   HTML_ELEMENT,
@@ -325,13 +325,9 @@ function reviveUncached(
   if (tag === REFERENCE_TAG)
     throw new Error(`islx value ${String(object[TAG_VALUE])} was not resolved`);
   if (tag === CYCLE_TAG) {
-    const levels = object[TAG_VALUE];
-    const index = scope.ancestors.length - (levels as number);
-    if (!Number.isInteger(levels) || (levels as number) < 1 || index < 0) {
-      throw new TypeError("malformed islx cycle reference");
-    }
-    scope.lowest = Math.min(scope.lowest, index);
-    return scope.ancestors[index];
+    const target = resolveCycle(scope.ancestors, object[TAG_VALUE]);
+    scope.lowest = Math.min(scope.lowest, scope.ancestors.length - (object[TAG_VALUE] as number));
+    return target;
   }
   // Containers exist before their contents, so a cycle reference inside can name them.
   const data = object[TAG_VALUE];
