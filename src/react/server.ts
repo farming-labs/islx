@@ -201,29 +201,38 @@ async function renderResultElements(element: React.ReactElement): Promise<Render
   return new RenderedElements(scope, await new Response(stream).text());
 }
 
-/** The value with each React element in it rendered; anything else stays as it is. */
-async function renderResult(value: unknown, ancestors = new Set<object>()): Promise<unknown> {
-  if (React.isValidElement(value)) return renderResultElements(value);
-  if (!value || typeof value !== "object" || ancestors.has(value)) return value;
+/**
+ * The value with each React element in it rendered; anything else stays as it is. Boxed: an async
+ * function that returned a promise the action returned would wait for it, and the browser would
+ * get its value instead of the promise.
+ */
+async function renderInResult(value: unknown, ancestors: Set<object>): Promise<{ value: unknown }> {
+  if (React.isValidElement(value)) return { value: await renderResultElements(value) };
+  if (!value || typeof value !== "object" || ancestors.has(value)) return { value };
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      const entries = await Promise.all(value.map((entry) => renderResult(entry, ancestors)));
-      return entries.some((entry, index) => entry !== value[index]) ? entries : value;
+      const entries = await Promise.all(value.map((entry) => renderInResult(entry, ancestors)));
+      return entries.some((entry, index) => entry.value !== value[index])
+        ? { value: entries.map((entry) => entry.value) }
+        : { value };
     }
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return value;
+    if (prototype !== Object.prototype && prototype !== null) return { value };
     const entries = await Promise.all(
       Object.entries(value).map(
-        async ([key, entry]) => [key, entry, await renderResult(entry, ancestors)] as const,
+        async ([key, entry]) =>
+          [key, entry, (await renderInResult(entry, ancestors)).value] as const,
       ),
     );
-    if (entries.every(([, entry, rendered]) => entry === rendered)) return value;
-    return plainObject(entries.map(([key, , rendered]) => [key, rendered]));
+    if (entries.every(([, entry, rendered]) => entry === rendered)) return { value };
+    return { value: plainObject(entries.map(([key, , rendered]) => [key, rendered])) };
   } finally {
     ancestors.delete(value);
   }
 }
+
+const renderResult = async (value: unknown) => (await renderInResult(value, new Set())).value;
 
 setActionResultRenderer(renderResult);
 
