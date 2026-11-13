@@ -312,13 +312,20 @@ function reviveUncached(
     });
   }
   if (tag === PROMISE_TAG && typeof object[TAG_VALUE] === "string") {
-    return islandPromise(object[TAG_VALUE], container, values);
+    const inherited = nextSteps.get(object);
+    return islandPromise(object[TAG_VALUE], container, values, {
+      ancestors: inherited ?? scope.ancestors.slice(),
+      step: !!inherited,
+    });
   }
   if (tag === STREAM_TAG && typeof object[TAG_VALUE] === "string") {
     const kind = object[STREAM_KIND_FIELD];
     if (kind !== "r" && kind !== "i" && kind !== "t") throw new TypeError("malformed islx stream");
     return fromStreamSteps(
-      islandPromise(object[TAG_VALUE], container, values) as PromiseLike<StreamStep>,
+      islandPromise(object[TAG_VALUE], container, values, {
+        ancestors: scope.ancestors.slice(),
+        step: true,
+      }) as PromiseLike<StreamStep>,
       kind,
     );
   }
@@ -400,6 +407,18 @@ function findPromiseScript(container: Element, name: string): Element | null {
 
 type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
 
+/** Where a promise's settled value continues: the containers above the promise, revived. */
+interface Placement {
+  ancestors: readonly unknown[];
+  /** Whether it is a stream's step, whose next step continues the stream's ancestors. */
+  step: boolean;
+}
+
+const UNPLACED: Placement = { ancestors: [], step: false };
+
+/** The tags that name a stream step's next step, by tag object, with the stream's ancestors. */
+const nextSteps = new WeakMap<object, readonly unknown[]>();
+
 /**
  * Rebuilds the server trees of slots in a promise's value (installed by the hydration runtime,
  * which has the module loader). They join the island's other prepared slots.
@@ -414,6 +433,7 @@ function readOutcome(
   script: Element,
   container: Element,
   values: ValueStore,
+  place: Placement,
   done: (outcome: Outcome) => void,
 ): void {
   let parsed: unknown;
@@ -432,7 +452,13 @@ function readOutcome(
   }
   const finish = () => {
     try {
-      done({ ok: true, value: (revive(parsed, container, values) as { v: unknown }).v });
+      // The value continues where the promise is, so a cycle reference inside counts up through
+      // the containers above it (the server does not count the `{"v":…}` wrapper).
+      const value = (parsed as { v: unknown }).v;
+      const next = place.step ? (value as { n?: unknown } | null)?.n : undefined;
+      if (next && typeof next === "object") nextSteps.set(next, place.ancestors);
+      const scope = { ancestors: [...place.ancestors], lowest: Infinity };
+      done({ ok: true, value: revive(value, container, values, scope) });
     } catch (reason) {
       done({ ok: false, reason });
     }
@@ -454,7 +480,12 @@ function readOutcome(
 // object holding it) is the same promise, placed before its value is revived.
 const islandPromises = new WeakMap<Element, Map<string, IslandThenable>>();
 
-function islandPromise(name: string, container: Element, values: ValueStore): IslandThenable {
+function islandPromise(
+  name: string,
+  container: Element,
+  values: ValueStore,
+  place: Placement = UNPLACED,
+): IslandThenable {
   let named = islandPromises.get(container);
   if (!named) islandPromises.set(container, (named = new Map()));
   const known = named.get(name);
@@ -482,7 +513,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
   };
   const script = findPromiseScript(container, name);
   if (script) {
-    readOutcome(script, container, values, settle);
+    readOutcome(script, container, values, place, settle);
     return thenable;
   }
   pendingPromises.set(name, {
@@ -491,7 +522,7 @@ function islandPromise(name: string, container: Element, values: ValueStore): Is
     values,
     settle(found) {
       pendingPromises.delete(name);
-      readOutcome(found, container, values, settle);
+      readOutcome(found, container, values, place, settle);
     },
   });
   if (!promiseObserver && typeof MutationObserver === "function") {

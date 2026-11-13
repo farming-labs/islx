@@ -620,28 +620,75 @@ describe("islands", () => {
     expect(errors()).toEqual([]);
   });
 
-  it("send a promise prop that settles to the object holding it once, instead of without end", async () => {
+  it("settle a promise prop to the object holding it, as React Server Components do", async () => {
     const errors = spyErrors();
-    type Holder = { name: string; self?: Promise<Holder> };
+    type Holder = { name: string; self?: Promise<Holder>; list: Holder[] };
     function Owner({ holder }: { holder: Holder }) {
       const settled = use(holder.self!);
       return h(
         "p",
         { "data-owner": "" },
-        `${settled.name} ${String(settled.self === holder.self)}`,
+        `${settled.name} ${String(settled === holder)} ${String(settled.list[0] === holder)}`,
       );
     }
     modules["/src/owner.tsx"] = { Owner };
     const OwnerIsland = createIsland(Owner, "/src/owner.tsx", "Owner");
-    const holder: Holder = { name: "holder" };
+    const holder: Holder = { name: "holder", list: [] };
     holder.self = Promise.resolve(holder);
+    holder.list.push(holder);
     const markup = await html(
       h(Suspense, { fallback: h("p", null, "waiting") }, h(OwnerIsland, { holder })),
     );
+    // Sent once, and the server render reads the same object.
     expect(markup.match(/type="f\/promise"/g)).toHaveLength(1);
+    expect(markup).toContain("holder true true");
     await mount(markup);
     await vi.waitFor(() =>
-      expect(document.querySelector("[data-owner]")!.textContent).toBe("holder true"),
+      expect(document.querySelector("[data-owner]")!.textContent).toBe("holder true true"),
+    );
+    expect(errors()).toEqual([]);
+  });
+
+  it("let a stream prop's chunks refer to the object holding the stream", async () => {
+    const errors = spyErrors();
+    type Feed = { name: string; chunks?: ReadableStream<{ feed: Feed; index: number }> };
+    const seen = new WeakMap<object, Promise<string>>();
+    // Reads every chunk while rendering, on the server and in the browser.
+    const readAll = (feed: Feed) => {
+      let read = seen.get(feed.chunks!);
+      if (!read) {
+        read = (async () => {
+          const parts: string[] = [];
+          const reader = feed.chunks!.getReader();
+          for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+            parts.push(`${chunk.value.index}:${String(chunk.value.feed === feed)}`);
+          }
+          return parts.join(" ");
+        })();
+        seen.set(feed.chunks!, read);
+      }
+      return read;
+    };
+    function Reader({ feed }: { feed: Feed }) {
+      return h("p", { "data-feed": "" }, use(readAll(feed)));
+    }
+    modules["/src/reader.tsx"] = { Reader };
+    const ReaderIsland = createIsland(Reader, "/src/reader.tsx", "Reader");
+    const feed: Feed = { name: "feed" };
+    let index = 0;
+    feed.chunks = new ReadableStream({
+      pull(controller) {
+        if (index === 3) return controller.close();
+        controller.enqueue({ feed, index: index++ });
+      },
+    });
+    const markup = await html(
+      h(Suspense, { fallback: h("p", null, "waiting") }, h(ReaderIsland, { feed })),
+    );
+    expect(markup).toContain("0:true 1:true 2:true");
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-feed]")!.textContent).toBe("0:true 1:true 2:true"),
     );
     expect(errors()).toEqual([]);
   });

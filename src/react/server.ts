@@ -26,7 +26,13 @@ import {
   parseHeldValues,
   selectValuesToSend,
 } from "../server/values";
-import { getContexts, getWireSteps, runtimeTagged, setIslandServerHook } from "./island";
+import {
+  getContexts,
+  getWireSteps,
+  runtimeTagged,
+  setIslandServerHook,
+  type IslandPromiseEntry,
+} from "./island";
 import { renderSlotTree } from "./tree";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
@@ -51,10 +57,12 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 setIslandServerHook({
-  encode(props, held, named) {
-    const promises: Array<{ name: string; promise: PromiseLike<unknown> }> = [];
+  encode(props, held, context, ancestors) {
+    const promises: IslandPromiseEntry[] = [];
+    const named = context?.named;
     const addressed = addressValues(props, {
-      encodeSpecial: (value) => {
+      ancestors,
+      encodeSpecial: (value, above) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
         const known = value && typeof value === "object" ? named?.get(value) : undefined;
         if (known) return known;
@@ -64,7 +72,12 @@ setIslandServerHook({
           // the island split already has its steps.
           const name = nextPromiseName();
           const split = getWireSteps(value as object);
-          promises.push({ name, promise: split?.first ?? toStreamSteps(value as object, kind) });
+          promises.push({
+            name,
+            promise: split?.first ?? toStreamSteps(value as object, kind),
+            ancestors: above(),
+            step: true,
+          });
           const tag = {
             [TAG]: STREAM_TAG,
             [TAG_VALUE]: name,
@@ -75,7 +88,13 @@ setIslandServerHook({
         }
         if (isThenable(value)) {
           const name = nextPromiseName();
-          promises.push({ name, promise: value });
+          const inherited = context?.nextSteps.get(value);
+          promises.push({
+            name,
+            promise: value,
+            ancestors: inherited ?? above(),
+            step: !!inherited,
+          });
           const tag = { [TAG]: PROMISE_TAG, [TAG_VALUE]: name };
           named?.set(value as object, tag);
           return tag;
