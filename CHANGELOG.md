@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.17
+
+A promise that settles to the object holding it works, as under React Server Components.
+
+- A server action can return an object whose promise settles to that object: the promise
+  settles to the same object in the browser. Before, the server sent it again without end and its
+  event loop stalled. A stream's chunks can refer to the object holding the stream too.
+- A client component can receive such a prop, and its promise (or stream chunk) gives back the
+  same object, on the server render and in the browser. Before, React's server render overflowed
+  its stack.
+- A promise or stream that appears twice in a result, or twice in one island's props, is one
+  promise or stream in the browser.
+
 ## 0.0.16
 
 Elements that arrive later render, as under React Server Components.
