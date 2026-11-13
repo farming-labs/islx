@@ -56,6 +56,11 @@ export const TAG = "$";
 export const TAG_VALUE = "v";
 /** The key of an action's sealed captured values. */
 export const TAG_BOUND = "b";
+/**
+ * The key of the arguments an action argument was bound to in the browser (`.bind`), tagged: they
+ * come after its sealed values, and the server seals them all again if it sends the action back.
+ */
+export const TAG_BROWSER_BOUND = "c";
 
 /** `{"$":"r","v":key}`: a value sent once, by key. */
 export const REFERENCE_TAG = "r";
@@ -83,7 +88,10 @@ export const SLOT_HOST_FIELD = "h";
  * them from, so their client components are live, as React Server Components return them.
  */
 export const ELEMENT_TAG = "x";
-/** `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. */
+/**
+ * `{"$":"a","v":id}` or `{"$":"a","v":id,"b":sealed}`: a server action. An action argument may
+ * also carry `"c"`, the arguments the browser bound it to.
+ */
 export const ACTION_TAG = "a";
 /**
  * `{"$":"T","v":name}`: a promise an island receives, settled by the `f/promise` script `name`.
@@ -200,7 +208,11 @@ export function getTag(value: unknown): string | undefined {
   const keys = Object.keys(value);
   if (keys.length === 1) return tag;
   if (keys.length === 2 && TAG_VALUE in value) return tag;
-  if (keys.length === 3 && tag === ACTION_TAG && TAG_VALUE in value && TAG_BOUND in value) {
+  if (
+    tag === ACTION_TAG &&
+    TAG_VALUE in value &&
+    keys.length === 2 + Number(TAG_BOUND in value) + Number(TAG_BROWSER_BOUND in value)
+  ) {
     return tag;
   }
   if (

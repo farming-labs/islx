@@ -55,7 +55,7 @@ whose own props are `p`. An object with any other keys is data.
 | --- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `r` | a value sent once                                                          | its key                                                                                                                                                                 |
 | `s` | a slot                                                                     | its name                                                                                                                                                                |
-| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values                                                                                                             |
+| `a` | a server action                                                            | its id; `b`, when present, holds its sealed captured values; `c`, on an argument, the arguments the browser bound it to                                                 |
 | `x` | React elements a server action returned (results only)                     | `{"s":scope,"h":html}`: their server HTML, with the server tree named `scope` that the browser rebuilds them from                                                       |
 | `o` | app data with a `$` key                                                    | the object                                                                                                                                                              |
 | `u` | `undefined`                                                                |                                                                                                                                                                         |
@@ -142,6 +142,11 @@ action checks its inputs and the caller's rights like any other request handler.
 
 An action's **bound values** are the variables an inline action captured, then arguments added
 with `.bind` on the server. They travel sealed (below) and come before the call's own arguments.
+Arguments bound in the browser travel with each call. An action the browser bound and sends as an
+argument carries them as `c`, tagged like any argument, after its sealed values. The server runs
+it with its opened sealed values first and `c` after, never in their place: a reference without
+the sealed values its captured variables need is refused. Bound again on the server and sent back,
+the action seals all of them again.
 
 **Called from JavaScript:**
 
