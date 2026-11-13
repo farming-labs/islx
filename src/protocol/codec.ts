@@ -16,6 +16,7 @@
  * Decoding accepts input from the browser (server action arguments): it builds plain objects
  * without assigning `__proto__`, and rejects unknown or malformed tags.
  */
+import { getStreamKind } from "./stream";
 import {
   ACTION_TAG,
   BLOB_TAG,
@@ -334,7 +335,8 @@ export function encode(value: unknown, options: EncodeOptions = {}): unknown {
         return fail("elements (JSX) are not serializable");
       }
       const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null) {
+      // A plain object that is an async iterable is a stream, not its (symbol-keyed) fields.
+      if ((prototype !== Object.prototype && prototype !== null) || getStreamKind(value)) {
         const special = options.encodeObject?.(value as object);
         if (special !== undefined) return special;
         const name = (value as object).constructor?.name;
