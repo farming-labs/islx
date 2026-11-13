@@ -43,7 +43,11 @@ export const PROMISE_SCRIPT_TYPE = "f/promise";
 /** The script type of React's form state after a `useActionState` form post, for hydration. */
 export const FORM_STATE_SCRIPT_TYPE = "f/form-state";
 
-/** The `code` of the error a circular value throws while its props are encoded. */
+/**
+ * The `code` of the error a circular value threw while its props were encoded.
+ *
+ * @deprecated Circular values travel since 0.0.15 (`CYCLE_TAG`), so nothing throws this code.
+ */
 export const CIRCULAR_VALUE = "ISLX_CIRCULAR_VALUE";
 
 /** The reserved JSON key whose value is a tag. */
@@ -55,6 +59,11 @@ export const TAG_BOUND = "b";
 
 /** `{"$":"r","v":key}`: a value sent once, by key. */
 export const REFERENCE_TAG = "r";
+/**
+ * `{"$":"C","v":levels}`: a value that contains itself. It stands for the object, array, `Map`
+ * or `Set` that many levels above it, counting only those (1 is the one holding it).
+ */
+export const CYCLE_TAG = "C";
 /** `{"$":"s","v":name}`: a slot. */
 export const SLOT_TAG = "s";
 /**

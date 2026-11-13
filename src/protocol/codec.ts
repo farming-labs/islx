@@ -20,6 +20,7 @@ import { getStreamKind } from "./stream";
 import {
   ACTION_TAG,
   BLOB_TAG,
+  CYCLE_TAG,
   FORM_DATA_TAG,
   OBJECT_TAG,
   PROMISE_TAG,
@@ -159,6 +160,7 @@ export function decodeTagged(
     case BLOB_TAG:
     case PROMISE_TAG:
     case STREAM_TAG:
+    case CYCLE_TAG:
       return NOT_A_VALUE;
     case OBJECT_TAG:
       if (data && typeof data === "object" && !Array.isArray(data)) {

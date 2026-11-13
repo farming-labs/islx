@@ -16,7 +16,6 @@ import { getStreamKind } from "../protocol/stream";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
-  CIRCULAR_VALUE,
   ID_POSITION_ATTRIBUTE,
   ISLAND_ELEMENT,
   PROMISE_SCRIPT_TYPE,
@@ -260,8 +259,9 @@ function splitSlots(
   value: unknown,
   prefix: string,
   slots: IslandSlots,
-  // The objects above `value`: one that contains itself is left whole, and the encoder reports it.
-  ancestors: Set<object> = new Set(),
+  // The copies of the objects above `value`: one that contains itself contains its copy, so the
+  // props render and travel with the same cycle.
+  copies: Map<object, { render: unknown; wire: unknown }> = new Map(),
 ): { render: unknown; wire: unknown } {
   if (isElement(value)) {
     const name = `${prefix}${slots.next++}`;
@@ -274,35 +274,37 @@ function splitSlots(
       wire: reference,
     };
   }
-  if (value && typeof value === "object" && ancestors.has(value)) {
-    return { render: value, wire: value };
-  }
+  if (!value || typeof value !== "object") return { render: value, wire: value };
+  const copied = copies.get(value);
+  if (copied) return copied;
   if (Array.isArray(value)) {
-    ancestors.add(value);
-    const parts = value.map((entry) => splitSlots(entry, prefix, slots, ancestors));
-    ancestors.delete(value);
-    return { render: parts.map((part) => part.render), wire: parts.map((part) => part.wire) };
-  }
-  if (value && typeof value === "object") {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
-    // A plain object that is an async iterable travels as a stream, symbol key and all.
-    if (getStreamKind(value)) return { render: value, wire: value };
-    ancestors.add(value);
-    const render: Record<string, unknown> = {};
-    const wire: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      const part = splitSlots(entry, prefix, slots, ancestors);
-      render[key] = part.render;
-      wire[key] = part.wire;
+    const copy = { render: [] as unknown[], wire: [] as unknown[] };
+    copies.set(value, copy);
+    for (const entry of value) {
+      const part = splitSlots(entry, prefix, slots, copies);
+      copy.render.push(part.render);
+      copy.wire.push(part.wire);
     }
-    ancestors.delete(value);
-    return { render, wire };
+    copies.delete(value);
+    return copy;
   }
-  return { render: value, wire: value };
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
+  // A plain object that is an async iterable travels as a stream, symbol key and all.
+  if (getStreamKind(value)) return { render: value, wire: value };
+  const copy = {
+    render: {} as Record<string, unknown>,
+    wire: {} as Record<string, unknown>,
+  };
+  copies.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    const part = splitSlots(entry, prefix, slots, copies);
+    copy.render[key] = part.render;
+    copy.wire[key] = part.wire;
+  }
+  copies.delete(value);
+  return copy;
 }
-
-const warned = new Set<string>();
 
 type Outcome = { ok: true; value: unknown } | { ok: false; reason: unknown };
 // One settled promise per promise, so React's retries read the same one.
@@ -500,22 +502,13 @@ export function createIsland<P extends object>(
       // An action's sealed values still sealing: React renders this part again once ready.
       if (isThenable(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
-      // React Server Components refuse a prop they cannot send, so a render fails here too. A
-      // circular value, which they do send, renders without hydration until islx sends it.
-      if ((error as { code?: unknown } | null)?.code !== CIRCULAR_VALUE) {
-        throw new TypeError(
-          `${exportName} (${src}) cannot get its props in the browser: ${message}`,
-          { cause: error },
-        );
-      }
-      const key = `${src}#${exportName}:${message}`;
-      if (!warned.has(key)) {
-        warned.add(key);
-        console.warn(
-          `[islx] ${exportName} (${src}) was rendered without hydration: its props cannot be sent to the browser. ${message}`,
-        );
-      }
-      return React.createElement(Component, props);
+      // React Server Components refuse a prop they cannot send, so a render fails here too.
+      throw new TypeError(
+        `${exportName} (${src}) cannot get its props in the browser: ${message}`,
+        {
+          cause: error,
+        },
+      );
     }
 
     // Where the island's component sits in the page, for its useId calls (see ./ids).

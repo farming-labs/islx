@@ -14,6 +14,8 @@ import { fromStreamSteps, type StreamStep } from "../protocol/stream";
 import {
   HTML_ELEMENT,
   ACTION_TAG,
+  CYCLE_TAG,
+  OBJECT_TAG,
   ID_POSITION_ATTRIBUTE,
   HYDRATED_ATTRIBUTE,
   FORM_STATE_SCRIPT_TYPE,
@@ -208,28 +210,70 @@ function HostSlot({
   );
 }
 
+/**
+ * Where a revive is: the objects, arrays, maps and sets above the value, revived (what a cycle
+ * reference names), and the highest of them a cycle reference below has named.
+ */
+interface ReviveScope {
+  ancestors: unknown[];
+  lowest: number;
+}
+
 /** Turns travelled props back into values: slots keep their server HTML, actions become callable. */
-function revive(value: unknown, container: Element, values: ValueStore): unknown {
+function revive(
+  value: unknown,
+  container: Element,
+  values: ValueStore,
+  scope: ReviveScope = { ancestors: [], lowest: Infinity },
+): unknown {
   if (value && typeof value === "object") {
     const cached = revivedValues.get(value);
     if (cached !== undefined) return cached;
     const slotsBefore = slotsRevived;
-    const revived = reviveUncached(value, container, values);
-    if (slotsRevived === slotsBefore) revivedValues.set(value, revived);
+    const depth = scope.ancestors.length;
+    const outer = scope.lowest;
+    scope.lowest = Infinity;
+    const revived = reviveUncached(value, container, values, scope);
+    // A value that refers to one above it is a different value elsewhere: it is not kept.
+    if (slotsRevived === slotsBefore && scope.lowest >= depth) revivedValues.set(value, revived);
+    scope.lowest = Math.min(outer, scope.lowest);
     return revived;
   }
   return value;
 }
 
-function reviveUncached(value: object, container: Element, values: ValueStore): unknown {
+/** Fills `into` with `fill` while cycle references inside may name it; `fill` says whether anything changed. */
+function reviveInto<T>(
+  into: T,
+  scope: ReviveScope,
+  fill: (into: T) => boolean,
+): { value: T; changed: boolean } {
+  scope.ancestors.push(into);
+  try {
+    return { value: into, changed: fill(into) };
+  } finally {
+    scope.ancestors.pop();
+  }
+}
+
+function reviveUncached(
+  value: object,
+  container: Element,
+  values: ValueStore,
+  scope: ReviveScope,
+): unknown {
+  const child = (entry: unknown) => revive(entry, container, values, scope);
   if (Array.isArray(value)) {
-    let changed = false;
-    const revived = value.map((entry) => {
-      const next = revive(entry, container, values);
-      if (next !== entry) changed = true;
-      return next;
+    const revived = reviveInto([] as unknown[], scope, (into) => {
+      let changed = false;
+      for (const entry of value) {
+        const next = child(entry);
+        into.push(next);
+        if (next !== entry) changed = true;
+      }
+      return changed;
     });
-    return changed ? revived : value;
+    return revived.changed ? revived.value : value;
   }
   const object = value as Record<string, unknown>;
   const tag = getTag(object);
@@ -280,18 +324,52 @@ function reviveUncached(value: object, container: Element, values: ValueStore): 
   }
   if (tag === REFERENCE_TAG)
     throw new Error(`islx value ${String(object[TAG_VALUE])} was not resolved`);
+  if (tag === CYCLE_TAG) {
+    const levels = object[TAG_VALUE];
+    const index = scope.ancestors.length - (levels as number);
+    if (!Number.isInteger(levels) || (levels as number) < 1 || index < 0) {
+      throw new TypeError("malformed islx cycle reference");
+    }
+    scope.lowest = Math.min(scope.lowest, index);
+    return scope.ancestors[index];
+  }
+  // Containers exist before their contents, so a cycle reference inside can name them.
+  const data = object[TAG_VALUE];
+  if (tag === "M" && Array.isArray(data)) {
+    return reviveInto(new Map(), scope, (map) => {
+      for (const pair of data) {
+        if (!Array.isArray(pair) || pair.length !== 2) throw new TypeError('malformed "M" tag');
+        map.set(child(pair[0]), child(pair[1]));
+      }
+      return true;
+    }).value;
+  }
+  if (tag === "S" && Array.isArray(data)) {
+    return reviveInto(new Set(), scope, (set) => {
+      for (const entry of data) set.add(child(entry));
+      return true;
+    }).value;
+  }
+  if (tag === OBJECT_TAG && data && typeof data === "object" && !Array.isArray(data)) {
+    return reviveInto({} as Record<string, unknown>, scope, (into) => {
+      for (const [key, entry] of Object.entries(data)) setOwn(into, key, child(entry));
+      return true;
+    }).value;
+  }
   if (tag !== undefined) {
-    const decoded = decodeTagged(object, (child) => revive(child, container, values));
+    const decoded = decodeTagged(object, child);
     if (decoded !== NOT_A_VALUE) return decoded;
   }
-  let changed = false;
-  const revived: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(object)) {
-    const next = revive(entry, container, values);
-    setOwn(revived, key, next);
-    if (next !== entry) changed = true;
-  }
-  return changed ? revived : value;
+  const revived = reviveInto({} as Record<string, unknown>, scope, (into) => {
+    let changed = false;
+    for (const [key, entry] of Object.entries(object)) {
+      const next = child(entry);
+      setOwn(into, key, next);
+      if (next !== entry) changed = true;
+    }
+    return changed;
+  });
+  return revived.changed ? revived.value : value;
 }
 
 type IslandThenable = Promise<unknown> & {
