@@ -12,7 +12,13 @@ import * as React from "react";
 import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { getBuildDefaults } from "../server/build";
-import { getStreamKind } from "../protocol/stream";
+import {
+  fromStreamSteps,
+  getStreamKind,
+  toStreamSteps,
+  type StreamKind,
+  type StreamStep,
+} from "../protocol/stream";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
@@ -229,6 +235,59 @@ const splitPromises = new WeakMap<object, { render: Promise<unknown>; wire: Prom
 /** The slots of a split promise's value, by its `wire` promise, for `IslandPromise` to write. */
 const promiseSlots = new WeakMap<object, Promise<IslandSlots>>();
 
+/**
+ * A stream prop, read once and split chunk by chunk: the island's server render reads one copy
+ * and the browser gets the other, as React Server Components give each their own.
+ */
+const splitStreams = new WeakMap<object, { render: unknown; wire: unknown }>();
+/** The first step of a split stream's browser copy, by that copy, for the encoder. */
+const wireSteps = new WeakMap<object, { first: Promise<StreamStep>; kind: StreamKind }>();
+
+/** @internal The steps the browser gets for a stream an island received, if it was split. */
+export function getWireSteps(
+  value: object,
+): { first: Promise<StreamStep>; kind: StreamKind } | undefined {
+  return wireSteps.get(value);
+}
+
+/** Splits each step's chunk (and return value) as it arrives; see `splitSlots`' promises. */
+function splitSteps(
+  steps: PromiseLike<StreamStep>,
+  prefix: string,
+  held: ReadonlySet<string> | null,
+  count: { next: number },
+): { render: Promise<StreamStep>; wire: Promise<StreamStep> } {
+  const parts = Promise.resolve(steps).then(async (step) => {
+    const inner = createSlots(held);
+    const split = (value: unknown) => splitSlots(value, `${prefix}${count.next++}_`, inner);
+    let render: StreamStep;
+    let wire: StreamStep;
+    if ("d" in step) {
+      const part = step.v === undefined ? null : split(step.v);
+      render = part ? { d: 1, v: part.render } : step;
+      wire = part ? { d: 1, v: part.wire } : step;
+    } else {
+      const part = split(step.v);
+      const next = splitSteps(step.n, prefix, held, count);
+      render = { v: part.render, n: next.render };
+      wire = { v: part.wire, n: next.wire };
+    }
+    if (inner.elements.size > 0) {
+      inner.trees = await renderSlots(inner.elements, held);
+      markSlotReferences(inner);
+    }
+    return { render, wire, inner };
+  });
+  const render = parts.then((part) => part.render);
+  const wire = parts.then((part) => part.wire);
+  render.catch(() => {});
+  wire.catch(() => {});
+  const inner = parts.then((part) => part.inner);
+  inner.catch(() => {});
+  promiseSlots.set(wire, inner);
+  return { render, wire };
+}
+
 // One resolution per island render: React renders the island again with the same props once the
 // slots resolved, and a render that runs twice for one request reuses them.
 const resolvedSlots = new WeakMap<object, Promise<Map<string, SlotTree>>>();
@@ -357,10 +416,22 @@ function splitSlots(
     copies.delete(value);
     return copy;
   }
+  // A stream travels as one, a plain object that is an async iterable too (symbol key and all).
+  const kind = getStreamKind(value);
+  if (kind) {
+    const prefixed = `${prefix}w${slots.promises++}_`;
+    let split = splitStreams.get(value);
+    if (!split) {
+      const steps = splitSteps(toStreamSteps(value, kind), prefixed, slots.held, { next: 0 });
+      const wire = fromStreamSteps(steps.wire, kind) as object;
+      wireSteps.set(wire, { first: steps.wire, kind });
+      split = { render: fromStreamSteps(steps.render, kind), wire };
+      splitStreams.set(value, split);
+    }
+    return split;
+  }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return { render: value, wire: value };
-  // A plain object that is an async iterable travels as a stream, symbol key and all.
-  if (getStreamKind(value)) return { render: value, wire: value };
   const copy = {
     render: {} as Record<string, unknown>,
     wire: {} as Record<string, unknown>,

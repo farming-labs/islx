@@ -593,6 +593,56 @@ describe("islands", () => {
     expect(errors()).toEqual([]);
   });
 
+  it("give a stream prop's chunks to the server render too, elements included", async () => {
+    const errors = spyErrors();
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    const firsts = new WeakMap<object, Promise<ReactNode>>();
+    // Reads the stream's first chunk while rendering, on the server and in the browser.
+    const first = (stream: ReadableStream<ReactNode>) => {
+      let read = firsts.get(stream);
+      if (!read) {
+        read = stream
+          .getReader()
+          .read()
+          .then((chunk) => chunk.value);
+        firsts.set(stream, read);
+      }
+      return read;
+    };
+    function Ticker({ ticks }: { ticks: ReadableStream<ReactNode> }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-ticker": "", onClick: () => setClicks(clicks + 1) },
+          `ticker ${clicks}`,
+        ),
+        h("output", { "data-first": "" }, use(first(ticks))),
+      );
+    }
+    modules["/src/ticker.tsx"] = { Ticker };
+    const TickerIsland = createIsland(Ticker, "/src/ticker.tsx", "Ticker");
+    const ticks = new ReadableStream<ReactNode>({
+      async start(controller) {
+        await tick();
+        controller.enqueue(h("b", null, "tick ", h(CounterIsland, { start: 1, label: "tick" })));
+        controller.close();
+      },
+    });
+    const markup = await html(h(Suspense, { fallback: null }, h(TickerIsland, { ticks })));
+    expect(markup).toContain("<b>tick");
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-ticker]")!.click());
+    expect(document.querySelector("[data-ticker]")!.textContent).toBe("ticker 1");
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[data-counter="tick"]')!.click(),
+    );
+    expect(document.querySelector('[data-counter="tick"]')!.textContent).toBe("tick 2");
+    expect(errors()).toEqual([]);
+  });
+
   it("send props that refer to themselves, as React Server Components do", async () => {
     type Node = { name: string; self?: Node; children: Array<{ parent: Node }>; big: string };
     const node: Node = { name: "root", children: [], big: "x".repeat(600) };

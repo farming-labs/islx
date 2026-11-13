@@ -26,7 +26,7 @@ import {
   parseHeldValues,
   selectValuesToSend,
 } from "../server/values";
-import { getContexts, runtimeTagged, setIslandServerHook } from "./island";
+import { getContexts, getWireSteps, runtimeTagged, setIslandServerHook } from "./island";
 import { renderSlotTree } from "./tree";
 
 // Promise names are unique across renders and server instances, so a page that keeps islands from
@@ -58,10 +58,12 @@ setIslandServerHook({
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
         const kind = getStreamKind(value);
         if (kind) {
-          // Sent as the promise of its first step, which settles as the stream is read.
+          // Sent as the promise of its first step, which settles as the stream is read. A stream
+          // the island split already has its steps.
           const name = nextPromiseName();
-          promises.push({ name, promise: toStreamSteps(value as object, kind) });
-          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: kind };
+          const split = getWireSteps(value as object);
+          promises.push({ name, promise: split?.first ?? toStreamSteps(value as object, kind) });
+          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: split?.kind ?? kind };
         }
         if (isThenable(value)) {
           const name = nextPromiseName();
