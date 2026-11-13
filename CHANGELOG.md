@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.19
+
+More of what React Server Components send travels, in props and action results.
+
+- A `Map` or `Set` can hold elements and promises: elements render with their client components
+  live. Before, an island failed its render and an action answered 500.
+- Global symbols (`Symbol.for`), errors, generators and other self-iterators, `Blob`s and
+  `FormData` travel. An error arrives without its message, as in a React production build, and an
+  island's server render sees the same error. A `File` arrives as a `Blob`.
+- Wire: new tags `y`, `Z`, `i`, `b` and `f` (see SPEC).
+
 ## 0.0.18
 
 - With the React renderer installed (as in Farm), a server action that returns an object whose
