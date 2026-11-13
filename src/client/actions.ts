@@ -9,6 +9,7 @@
  */
 import { decode, encode } from "../protocol/codec";
 import { emit } from "./hooks";
+import { readStreamedResult } from "./result-stream";
 import {
   ACTION_HEADER,
   ACTION_STALE_HEADER,
@@ -18,6 +19,7 @@ import {
   CALL_FIELD,
   ELEMENT_TAG,
   FORM_DATA_TAG,
+  RESULT_STREAM_TYPE,
   attachmentField,
   TAG,
   TAG_BOUND,
@@ -222,7 +224,12 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
     return STALE;
   }
   if (!response.ok) throw new Error(`Server action failed: ${response.status}`);
-  const payload = (await response.json()) as { result?: unknown; redirect?: string };
+  // A result with promises or streams in it streams: its first line is the result.
+  const streamed = (response.headers.get("content-type") ?? "").startsWith(RESULT_STREAM_TYPE)
+    ? await readStreamedResult(response, (object) => decodeActionReference(object))
+    : null;
+  const payload =
+    streamed?.payload ?? ((await response.json()) as { result?: unknown; redirect?: string });
   const navigator = state().navigator;
   if (typeof payload.redirect === "string") {
     reference.redirect = payload.redirect;
@@ -233,7 +240,9 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
   const elements = await reviveElements(payload.result);
   const result = decode(payload.result, {
     decodeReference: (object) =>
-      elements.has(object) ? elements.get(object) : decodeActionReference(object),
+      elements.has(object)
+        ? elements.get(object)
+        : (streamed?.reference(object) ?? decodeActionReference(object)),
   });
   // The caller's pending state (`useFormStatus`, `useActionState`) lasts until the page shows
   // what the action changed.

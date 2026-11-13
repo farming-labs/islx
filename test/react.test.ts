@@ -1028,6 +1028,36 @@ describe("actions in islands", () => {
     expect(document.querySelector("output strong")!.textContent).toBe("3 items");
   });
 
+  it("keep the promises and streams an action returns unresolved, as the renderer walks them", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const mixed = async () => ({
+      total: gate.then(() => 3),
+      ticks: (async function* () {
+        await gate;
+        yield 1;
+      })(),
+    });
+    registerServerReference(mixed, "island-mixed-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-mixed-result")()) as {
+      total: Promise<number>;
+      ticks: AsyncIterator<number>;
+    };
+    expect(result.total).toBeInstanceOf(Promise);
+    release();
+    expect(await result.total).toBe(3);
+    expect(await result.ticks.next()).toEqual({ value: 1, done: false });
+  });
+
   it("render the elements an action returns inside the framework's run, once", async () => {
     const runs = vi.fn();
     const label = async () => h("em", { "data-label": "" }, "labelled");

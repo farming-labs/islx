@@ -103,6 +103,14 @@ export function attachmentField(index: number, key?: string): string {
   return key === undefined ? `$F_${index}` : `$F_${index}_${key}`;
 }
 
+/**
+ * The content type of an action's result that holds promises or streams: lines of JSON. The first
+ * is `{"result":…}`, with each promise as `{"$":"T","v":name}` (and each stream as `W`, on the
+ * promise of its first step); each later line settles one: `{"p":name,"v":{"v":value}}`, or
+ * `{"p":name,"e":1}` for a rejection, whose reason stays on the server.
+ */
+export const RESULT_STREAM_TYPE = "application/x-ndjson";
+
 /** Request header: the value keys the browser holds. */
 export const VALUES_HEADER = "F-Values";
 /** Request header: the layouts on screen, so the response can leave them out. */

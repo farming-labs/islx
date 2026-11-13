@@ -2,11 +2,12 @@
  * Handling a posted server action: one function on a Web `Request`, so any server mounts it.
  * It returns `null` for a request that is not an action, which the app then handles as usual.
  *
- * Calls from JavaScript (`F-Action` header) answer JSON. Forms posted without JavaScript run the
+ * Calls from JavaScript (`F-Action` header) answer JSON, or lines of JSON when the result holds
+ * promises or streams, which stream in after it. Forms posted without JavaScript run the
  * action and answer `303 See Other` back to the page, or render the page with a
  * `useActionState` result when the app gives `renderFormState`.
  */
-import { decode, encode } from "../protocol/codec";
+import { decode } from "../protocol/codec";
 import {
   ACTION_HEADER,
   ACTION_KEY_FIELD,
@@ -18,6 +19,7 @@ import {
   FORM_DATA_TAG,
   FORM_REF_PREFIX,
   REFERENCE_TAG,
+  RESULT_STREAM_TYPE,
   SLOT_TAG,
   TAG,
   TAG_VALUE,
@@ -25,14 +27,10 @@ import {
   readPostedAction,
   stripRuntimeFields,
 } from "../protocol/wire";
-import {
-  decodeActionReference,
-  encodeActionReference,
-  resolveAction,
-  type ResolvedAction,
-} from "./actions";
+import { decodeActionReference, resolveAction, type ResolvedAction } from "./actions";
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
+import { createResultEncoder } from "./result-stream";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
 
 const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
@@ -261,16 +259,26 @@ export async function handleAction(
       if (ran.outcome?.status) return text(ran.outcome.status, "Server action failed");
       return text(500, "Server action failed");
     }
-    const result = ran.result;
+    // Promises and streams in the result stream in after it, as React Server Components send them.
+    const results = createResultEncoder((value) =>
+      isRenderedElements(value)
+        ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
+        : undefined,
+    );
     try {
-      return json({
-        result: encode(result, {
-          encodeFunction: encodeActionReference,
-          encodeObject: (value) =>
-            isRenderedElements(value)
-              ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
-              : undefined,
-        }),
+      const result = results.encode(ran.result);
+      if (!results.streams) return json({ result });
+      const report =
+        options.onError ??
+        ((reason: unknown) =>
+          console.error("[islx] A server action's streamed result failed:", reason));
+      return new Response(results.stream({ result }, report), {
+        status: 200,
+        headers: {
+          "cache-control": "no-store",
+          "content-type": RESULT_STREAM_TYPE,
+          "x-content-type-options": "nosniff",
+        },
       });
     } catch (error) {
       (
