@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.18
+
+- With the React renderer installed (as in Farm), a server action that returns an object whose
+  promise settles to that object answers, and the promise gives back the same object. Before, the
+  response never ended. A result that holds itself and an element or a promise keeps its cycle
+  too: before, `result.self` was a separate copy.
+
 ## 0.0.17
 
 A promise that settles to the object holding it works, as under React Server Components.
