@@ -5,6 +5,7 @@
  */
 import { encodeLeaf, needsObjectTag } from "../protocol/codec";
 import {
+  CIRCULAR_VALUE,
   MAX_HELD_VALUES,
   OBJECT_TAG,
   REFERENCE_TAG,
@@ -100,7 +101,12 @@ export function addressValues(
         json.length,
       ];
     }
-    if (seen.has(value)) throw new TypeError("circular values are not serializable");
+    if (seen.has(value)) {
+      // Marked: an island with a circular prop renders without hydration instead of failing.
+      throw Object.assign(new TypeError("circular values are not serializable"), {
+        code: CIRCULAR_VALUE,
+      });
+    }
     seen.add(value);
     try {
       if (!encoded && (value instanceof Map || value instanceof Set)) {
