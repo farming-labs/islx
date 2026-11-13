@@ -3,11 +3,14 @@
  * server code they need (values, action references); `renderToStream` renders a page.
  */
 import * as React from "react";
+import { getStreamKind, toStreamSteps } from "../protocol/stream";
 import type { RenderToReadableStreamOptions } from "react-dom/server";
 import { encode, plainObject } from "../protocol/codec";
 import {
   FORM_STATE_SCRIPT_TYPE,
   PROMISE_TAG,
+  STREAM_KIND_FIELD,
+  STREAM_TAG,
   RENDER_HEADER,
   TAG,
   TAG_VALUE,
@@ -53,6 +56,13 @@ setIslandServerHook({
     const addressed = addressValues(props, {
       encodeSpecial: (value) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        const kind = getStreamKind(value);
+        if (kind) {
+          // Sent as the promise of its first step, which settles as the stream is read.
+          const name = nextPromiseName();
+          promises.push({ name, promise: toStreamSteps(value as object, kind) });
+          return { [TAG]: STREAM_TAG, [TAG_VALUE]: name, [STREAM_KIND_FIELD]: kind };
+        }
         if (isThenable(value)) {
           const name = nextPromiseName();
           promises.push({ name, promise: value });
