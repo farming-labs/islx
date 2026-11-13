@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.16
+
+Elements that arrive later render, as under React Server Components.
+
+- A client component given a promise that resolves to elements renders them, client components
+  inside included, and they hydrate. Before, the promise rejected in the browser.
+- A client component that reads a stream prop while rendering on the server gets its own copy of
+  the stream, and elements in its chunks render and hydrate. Before, the server render failed
+  with "ReadableStream is locked".
+- A server action's promises and streams can settle to elements. They render inside the
+  framework's `run`, with the request's context. Before, the browser got a rejection.
+
 ## 0.0.15
 
 Values that refer to themselves travel, as under React Server Components.
