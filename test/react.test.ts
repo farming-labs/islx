@@ -455,6 +455,49 @@ describe("islands", () => {
     expect(document.querySelector("[data-counter=kept]")!.textContent).toBe("kept 1");
   });
 
+  it("keep an island's state across a refresh when its props hold client components", async () => {
+    const errors = spyErrors();
+    function Framed({ panel, title }: { panel: ReactNode; title: string }) {
+      const [clicks, setClicks] = useState(0);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          { "data-framed": "", onClick: () => setClicks(clicks + 1) },
+          `${title} ${clicks}`,
+        ),
+        panel,
+      );
+    }
+    modules["/src/framed.tsx"] = { Framed };
+    const FramedIsland = createIsland(Framed, "/src/framed.tsx", "Framed");
+    const page = (title: string) =>
+      h(
+        "div",
+        { id: "page" },
+        h(FramedIsland, { title, panel: h(CounterIsland, { start: 0, label: "inner" }) }),
+      );
+    const islands = await mount(await html(page("first")));
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-framed]")!.click());
+    expect(document.querySelector("[data-framed]")!.textContent).toBe("first 1");
+    const next = document.createElement("div");
+    next.innerHTML = await html(page("second"));
+    const current = document.querySelector("#page")!;
+    await act(async () => {
+      expect(islands.carryOver(current, next)).toBe(1);
+      current.replaceWith(next.firstElementChild!);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-framed]")!.textContent).toBe("second 1");
+    });
+    const inner = document.querySelector<HTMLButtonElement>('[data-counter="inner"]')!;
+    await act(async () => inner.click());
+    expect(document.querySelector('[data-counter="inner"]')!.textContent).toBe("inner 1");
+    expect(errors()).toEqual([]);
+  });
+
   it("wait for a streamed island's props, which arrive after it, instead of failing", async () => {
     const markup = await html(h(CounterIsland, { start: 0, label: "late" }));
     const props = markup.match(/<script type="f\/props"[^>]*>.*?<\/script>/)![0];
