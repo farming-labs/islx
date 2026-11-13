@@ -15,6 +15,7 @@ import { getBuildDefaults } from "../server/build";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
+  CIRCULAR_VALUE,
   ID_POSITION_ATTRIBUTE,
   ISLAND_ELEMENT,
   PROMISE_SCRIPT_TYPE,
@@ -496,6 +497,14 @@ export function createIsland<P extends object>(
       // An action's sealed values still sealing: React renders this part again once ready.
       if (isThenable(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
+      // React Server Components refuse a prop they cannot send, so a render fails here too. A
+      // circular value, which they do send, renders without hydration until islx sends it.
+      if ((error as { code?: unknown } | null)?.code !== CIRCULAR_VALUE) {
+        throw new TypeError(
+          `${exportName} (${src}) cannot get its props in the browser: ${message}`,
+          { cause: error },
+        );
+      }
       const key = `${src}#${exportName}:${message}`;
       if (!warned.has(key)) {
         warned.add(key);
