@@ -36,6 +36,11 @@ export const CHUNK_SCRIPT_TYPE = "f/chunk";
 /** The element around server HTML inside a server tree. */
 export const HTML_ELEMENT = "f-html";
 /**
+ * After a client component in a server tree: `<template name>` holding the `<f-html>` parts its
+ * props carry that it did not render, which the browser shows when the component renders them.
+ */
+export const HTML_TEMPLATE_ELEMENT = "template";
+/**
  * The script type of a promise's outcome, written when it settles: `{"v":value}`, or `{"e":1}` for
  * a rejection. Its `name` attribute names the promise.
  */

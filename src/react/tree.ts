@@ -18,6 +18,7 @@ import { NOT_A_VALUE, decodeTagged, encodeLeaf } from "../protocol/codec";
 import {
   CHUNK_SCRIPT_TYPE,
   HTML_ELEMENT,
+  HTML_TEMPLATE_ELEMENT,
   REFERENCE_TAG,
   TAG,
   TREE_SCRIPT_TYPE,
@@ -95,6 +96,11 @@ interface TreeResolver {
   component(reference: string, exportName: string): React.ComponentType<any>;
   chunk(id: number): ResolvedChunk;
   serverHtml(id: number, key: React.Key | null): React.ReactElement;
+  /**
+   * After a client component: the server HTML parts `ids` its props carry that it did not render
+   * (a closed folder's icon), in a template the browser reads them from when it renders them.
+   */
+  unrendered(ids: number[]): React.ReactNode;
   /** A layout tree's outlet: where the layout renders the page, or another outlet by name. */
   outlet(name: string): React.ReactNode;
   /** The function a server action reference stands for. */
@@ -429,9 +435,10 @@ function fulfilledThenable(value: unknown): Promise<unknown> {
 function createTreeChildren(
   children: TreeValue | undefined,
   resolver: TreeResolver,
+  inClient: boolean,
 ): React.ReactNode[] {
   if (children === undefined) return [];
-  const node = createTreeValue(children, resolver);
+  const node = createTreeValue(children, resolver, inClient);
   // Spread a static child list the way JSX does, so React does not ask for keys.
   return Array.isArray(children) ? (node as React.ReactNode[]) : [node as React.ReactNode];
 }
@@ -440,52 +447,83 @@ function createTreeProps(
   props: { [key: string]: TreeValue },
   resolver: TreeResolver,
   key: TreeValue | undefined,
+  inClient: boolean,
 ): { props: Record<string, unknown>; children: React.ReactNode[] } {
   const { children, ...rest } = props;
   const created: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(rest)) {
-    created[name] = createTreeValue(value, resolver);
+    created[name] = createTreeValue(value, resolver, inClient);
   }
   if (typeof key === "string") created.key = key;
-  return { props: created, children: createTreeChildren(children, resolver) };
+  return { props: created, children: createTreeChildren(children, resolver, inClient) };
 }
 
-function createTreeValue(value: TreeValue, resolver: TreeResolver): unknown {
+/** The server HTML parts in `value`, in tree order. */
+function collectServerHtml(value: TreeValue, ids: number[]): number[] {
+  if (value === null || typeof value !== "object") return ids;
+  if (Array.isArray(value)) {
+    for (const entry of value) collectServerHtml(entry, ids);
+    return ids;
+  }
+  if (value.$ === "x") {
+    ids.push(value.i as number);
+    return ids;
+  }
+  const object = value.$ === "o" ? (value.v as { [key: string]: TreeValue }) : value;
+  for (const entry of Object.values(object)) collectServerHtml(entry, ids);
+  return ids;
+}
+
+/**
+ * `inClient`: inside a client component's props, whose server HTML parts the outermost client
+ * component's template keeps when they do not render.
+ */
+function createTreeValue(value: TreeValue, resolver: TreeResolver, inClient = false): unknown {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((entry) => createTreeValue(entry, resolver));
+  if (Array.isArray(value)) return value.map((entry) => createTreeValue(entry, resolver, inClient));
   switch (value.$) {
     case "h": {
       const { props, children } = createTreeProps(
         value.p as { [key: string]: TreeValue },
         resolver,
         value.k,
+        inClient,
       );
       return React.createElement(value.t as string, props, ...children);
     }
     case "c": {
+      const ids = inClient ? [] : collectServerHtml(value.p as TreeValue, []);
       const { props, children } = createTreeProps(
         value.p as { [key: string]: TreeValue },
         resolver,
-        value.k,
+        ids.length > 0 ? undefined : value.k,
+        true,
       );
-      return React.createElement(
+      const element = React.createElement(
         resolver.component(value.r as string, value.e as string),
         props,
         ...children,
+      );
+      if (ids.length === 0) return element;
+      return React.createElement(
+        React.Fragment,
+        typeof value.k === "string" ? { key: value.k } : null,
+        element,
+        resolver.unrendered(ids),
       );
     }
     case "f":
       return React.createElement(
         React.Fragment,
         typeof value.k === "string" ? { key: value.k } : null,
-        ...createTreeChildren(value.c, resolver),
+        ...createTreeChildren(value.c, resolver, inClient),
       );
     case "p":
       return React.createElement(
         React.Suspense,
         {
           ...(typeof value.k === "string" ? { key: value.k } : {}),
-          fallback: createTreeValue(value.f as TreeValue, resolver) as React.ReactNode,
+          fallback: createTreeValue(value.f as TreeValue, resolver, inClient) as React.ReactNode,
         },
         React.createElement(getChunkComponent(), {
           chunk: resolver.chunk(value.i as number),
@@ -500,23 +538,29 @@ function createTreeValue(value: TreeValue, resolver: TreeResolver): unknown {
     case "a":
       return resolver.action(value.v as string, typeof value.b === "string" ? value.b : undefined);
     case "P":
-      return fulfilledThenable(createTreeValue(value.v as TreeValue, resolver));
+      return fulfilledThenable(createTreeValue(value.v as TreeValue, resolver, inClient));
     case "o": {
       const object = value.v as { [key: string]: TreeValue };
       return Object.fromEntries(
-        Object.entries(object).map(([name, entry]) => [name, createTreeValue(entry, resolver)]),
+        Object.entries(object).map(([name, entry]) => [
+          name,
+          createTreeValue(entry, resolver, inClient),
+        ]),
       );
     }
     default: {
       if (value.$ !== undefined) {
         // A value JSON cannot hold: Date, Map, BigInt, …
         const decoded = decodeTagged(value as Record<string, unknown>, (child) =>
-          createTreeValue(child as TreeValue, resolver),
+          createTreeValue(child as TreeValue, resolver, inClient),
         );
         if (decoded !== NOT_A_VALUE) return decoded;
       }
       return Object.fromEntries(
-        Object.entries(value).map(([name, entry]) => [name, createTreeValue(entry, resolver)]),
+        Object.entries(value).map(([name, entry]) => [
+          name,
+          createTreeValue(entry, resolver, inClient),
+        ]),
       );
     }
   }
@@ -661,6 +705,69 @@ function scopedName(scope: string | undefined, id: number): string {
   return scope ? `${scope}:${id}` : String(id);
 }
 
+function RenderedServerHtml({
+  id,
+  rendered,
+  children,
+}: {
+  id: number;
+  rendered: Set<number>;
+  children?: React.ReactNode;
+}): React.ReactNode {
+  rendered.add(id);
+  return children;
+}
+
+// Renders after its client component, so the parts that component rendered are known by then; a
+// part rendered later, by a part of it that suspended first, renders in both places.
+function UnrenderedServerHtml({
+  ids,
+  rendered,
+  scope,
+  part,
+}: {
+  ids: number[];
+  rendered: Set<number>;
+  scope: string | undefined;
+  part(id: number, key: string): React.ReactElement;
+}): React.ReactNode {
+  const unrendered = ids.filter((id) => !rendered.has(id));
+  if (unrendered.length === 0) return null;
+  return React.createElement(
+    HTML_TEMPLATE_ELEMENT,
+    { [SERVER_HTML_ATTRIBUTE]: scopedName(scope, unrendered[0]!) },
+    unrendered.map((id) => part(id, `h${id}`)),
+  );
+}
+
+/** A server resolver's `<f-html>` parts, and the templates of the ones client components skip. */
+function createServerHtmlParts(
+  state: ResolveState,
+  scope: string | undefined,
+  isolate: (element: React.ReactNode) => React.ReactNode,
+): Pick<TreeResolver, "serverHtml" | "unrendered"> {
+  const rendered = new Set<number>();
+  const part = (id: number, key: string | null): React.ReactElement =>
+    React.createElement(
+      SERVER_HTML_TAG,
+      {
+        ...(key === null ? {} : { key }),
+        [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
+        style: { display: "contents" },
+      },
+      isolate(state.serverHtml.get(id) as React.ReactNode),
+    );
+  return {
+    serverHtml: (id, key) =>
+      React.createElement(
+        RenderedServerHtml,
+        { ...(key === null ? {} : { key }), id, rendered },
+        part(id, null),
+      ),
+    unrendered: (ids) => React.createElement(UnrenderedServerHtml, { ids, rendered, scope, part }),
+  };
+}
+
 function hasChildrenOutlet(value: TreeValue): boolean {
   if (value === null || typeof value !== "object") return false;
   if (Array.isArray(value)) return value.some(hasChildrenOutlet);
@@ -751,17 +858,7 @@ export async function renderServerTree(
       entry.chunk = chunk;
       return chunk;
     },
-    serverHtml(id, key) {
-      return React.createElement(
-        SERVER_HTML_TAG,
-        {
-          ...(key === null ? {} : { key }),
-          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
-          style: { display: "contents" },
-        },
-        isolate(state.serverHtml.get(id) as React.ReactNode),
-      );
-    },
+    ...createServerHtmlParts(state, scope, isolate),
     outlet(name) {
       return outletContent(options.outlets, name, layoutScript);
     },
@@ -920,9 +1017,23 @@ async function prepareTree(
   );
 
   const serverHtml = new Map<number, string>();
-  for (const container of root.querySelectorAll(`${SERVER_HTML_TAG}[${SERVER_HTML_ATTRIBUTE}]`)) {
-    const id = partId(container.getAttribute(SERVER_HTML_ATTRIBUTE));
-    if (id !== null) serverHtml.set(id, container.innerHTML);
+  const readParts = (parts: Iterable<Element>) => {
+    for (const container of parts) {
+      if (container.localName !== SERVER_HTML_TAG) continue;
+      const id = partId(container.getAttribute(SERVER_HTML_ATTRIBUTE));
+      if (id !== null) serverHtml.set(id, container.innerHTML);
+    }
+  };
+  readParts(root.querySelectorAll(`${SERVER_HTML_TAG}[${SERVER_HTML_ATTRIBUTE}]`));
+  // The parts client components did not render, by the first part's number.
+  const templates = new Map<number, string>();
+  for (const template of root.querySelectorAll<HTMLTemplateElement>(
+    `${HTML_TEMPLATE_ELEMENT}[${SERVER_HTML_ATTRIBUTE}]`,
+  )) {
+    const id = partId(template.getAttribute(SERVER_HTML_ATTRIBUTE));
+    if (id === null) continue;
+    templates.set(id, template.innerHTML);
+    readParts(template.content.children);
   }
 
   const resolver = (
@@ -957,6 +1068,15 @@ async function prepareTree(
           style: { display: "contents" },
           suppressHydrationWarning: true,
           dangerouslySetInnerHTML: { __html: html },
+        });
+      },
+      unrendered(ids) {
+        const id = ids.find((candidate) => templates.has(candidate));
+        if (id === undefined) return null;
+        return React.createElement(HTML_TEMPLATE_ELEMENT, {
+          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
+          suppressHydrationWarning: true,
+          dangerouslySetInnerHTML: { __html: templates.get(id)! },
         });
       },
       outlet(name) {
@@ -1207,17 +1327,7 @@ export async function renderSlotTree(
       entry.chunk = chunk;
       return chunk;
     },
-    serverHtml(id, key) {
-      return React.createElement(
-        SERVER_HTML_TAG,
-        {
-          ...(key === null ? {} : { key }),
-          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
-          style: { display: "contents" },
-        },
-        isolateIslands(state.serverHtml.get(id) as React.ReactNode),
-      );
-    },
+    ...createServerHtmlParts(state, scope, isolateIslands),
     outlet() {
       return null;
     },

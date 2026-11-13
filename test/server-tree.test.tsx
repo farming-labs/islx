@@ -73,6 +73,25 @@ function CallbackSource({ onPick }: { onPick: () => void }) {
     </button>
   );
 }
+function DisclosureSource({
+  icon,
+  children,
+  defaultOpen = false,
+}: {
+  icon: ReactNode;
+  children?: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button className={open ? "" : "disclosure"} onClick={() => setOpen(true)}>
+        {open ? icon : "closed"}
+      </button>
+      {open ? children : null}
+    </div>
+  );
+}
 function CounterSource() {
   const [count, setCount] = useState(0);
   return (
@@ -88,6 +107,7 @@ const modules: Record<string, Record<string, unknown>> = {
   "/src/stars.tsx": { Stars: StarsSource },
   "/src/callback.tsx": { Callback: CallbackSource },
   "/src/counter.tsx": { Counter: CounterSource },
+  "/src/disclosure.tsx": { Disclosure: DisclosureSource },
   "/src/panel.tsx": { PanelProvider, HeaderButton },
 };
 const PanelProviderIsland = createIsland(PanelProvider, "/src/panel.tsx", "PanelProvider", "load");
@@ -97,6 +117,7 @@ const Card = createIsland(CardSource, "/src/card.tsx", "Card", "load");
 const Stars = createIsland(StarsSource, "/src/stars.tsx", "Stars", "load");
 const Callback = createIsland(CallbackSource, "/src/callback.tsx", "Callback", "load");
 const Counter = createIsland(CounterSource, "/src/counter.tsx", "Counter", "load");
+const Disclosure = createIsland(DisclosureSource, "/src/disclosure.tsx", "Disclosure", "load");
 
 // --- server components --------------------------------------------------------------------------
 
@@ -305,6 +326,51 @@ describe("server tree pages", () => {
     expect(container.querySelector("#island")!.textContent).toBe("1");
     await click(container, "#header");
     expect(container.querySelector("#page")!.textContent).toBe("tree:open");
+  });
+
+  it("keeps server HTML a client component renders only later, such as a closed folder's icon", async () => {
+    function Icon() {
+      const id = useId();
+      return (
+        <svg data-id={id}>
+          <title>icon</title>
+        </svg>
+      );
+    }
+    function Badge() {
+      useState(0);
+      return (
+        <i id="badge">
+          <Counter />
+        </i>
+      );
+    }
+    async function Page() {
+      return (
+        <>
+          <Disclosure icon={<Icon />}>
+            <Badge />
+          </Disclosure>
+          <Disclosure icon={<Icon />} defaultOpen />
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    expect(html.match(/<svg/g)).toHaveLength(2);
+
+    const { container, errors, runtime } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    expect(container.querySelectorAll("svg")).toHaveLength(1);
+    await click(container, "#header");
+    expect(container.querySelector("#page")!.textContent).toBe("tree:open");
+
+    await click(container, ".disclosure");
+    expect(container.querySelectorAll("svg")).toHaveLength(2);
+    // The island inside server HTML shown later hydrates too.
+    await vi.waitFor(() => expect(runtime.rootCount()).toBe(1));
+    await click(container, "#island");
+    expect(container.querySelector("#island")!.textContent).toBe("1");
   });
 
   it("refuses a client component whose props cannot be sent, as React Server Components do", async () => {
@@ -713,6 +779,28 @@ describe("server tree layouts", () => {
     });
     expect(container.querySelector("#next")).not.toBeNull();
     expect(container.querySelector("#header")!.textContent).toBe("open");
+    layout.dispose();
+  });
+
+  it("keeps server HTML its client components render only later", async () => {
+    function Icon() {
+      useId();
+      return <svg />;
+    }
+    const html = await renderRoute(
+      <ServerLayout>
+        <Disclosure icon={<Icon />} />
+        <Outlet />
+      </ServerLayout>,
+    );
+    expect(html).toMatch(/<template name="\/:\d+"><f-html name="\/:\d+"/);
+
+    const { container, errors, layout } = await hydrateRoute(html);
+    expect(errors).toEqual([]);
+    await click(container, ".disclosure");
+    expect(container.querySelector("svg")).not.toBeNull();
+    await click(container, "#header");
+    expect(container.querySelector("#page")!.textContent).toBe("page:open");
     layout.dispose();
   });
 
