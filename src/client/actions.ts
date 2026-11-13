@@ -24,6 +24,7 @@ import {
   TAG,
   TAG_BOUND,
   TAG_VALUE,
+  TEMPORARY_TAG,
   getTag,
 } from "../protocol/wire";
 
@@ -169,8 +170,34 @@ async function reviveElements(value: unknown): Promise<Map<object, unknown>> {
 /** Returned by a call whose action this deploy no longer knows: the page reloads. */
 const STALE: unique symbol = Symbol("islx.action.stale");
 
+/** Whether a value is one a call sends as a temporary reference, as React's `encodeReply` does. */
+function isTemporaryValue(value: unknown): boolean {
+  if (typeof value === "symbol") return Symbol.keyFor(value) === undefined;
+  return typeof value === "function" || (!!value && typeof value === "object");
+}
+
 async function call(reference: ClientReference, args: unknown[]): Promise<unknown> {
   const all = [...reference.bound, ...args];
+  // Values the codec cannot carry go as their index: the action may only return them, and the
+  // result names them by index again.
+  const temporaries: unknown[] = [];
+  const temporaryIndex = new Map<unknown, number>();
+  const encodeTemporary = (value: unknown) => {
+    if (!isTemporaryValue(value)) return undefined;
+    let index = temporaryIndex.get(value);
+    if (index === undefined) {
+      index = temporaries.push(value) - 1;
+      temporaryIndex.set(value, index);
+    }
+    return { [TAG]: TEMPORARY_TAG, [TAG_VALUE]: index };
+  };
+  const decodeTemporary = (object: Record<string, unknown>) => {
+    if (object[TAG] !== TEMPORARY_TAG) return undefined;
+    const index = object[TAG_VALUE];
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) return undefined;
+    if (index >= temporaries.length) return undefined;
+    return temporaries[index];
+  };
   const single = all.length === 1 && all[0] instanceof FormData ? all[0] : null;
   let body: BodyInit;
   const headers: Record<string, string> = { [ACTION_HEADER]: reference.id };
@@ -194,7 +221,7 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
       return undefined;
     };
     const json = JSON.stringify({
-      a: encode(all, { encodeFunction, encodeObject }),
+      a: encode(all, { encodeFunction, encodeObject, encodeTemporary }),
       b: reference.token,
     });
     if (attachments.length === 0) {
@@ -226,7 +253,11 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
   if (!response.ok) throw new Error(`Server action failed: ${response.status}`);
   // A result with promises or streams in it streams: its first line is the result.
   const streamed = (response.headers.get("content-type") ?? "").startsWith(RESULT_STREAM_TYPE)
-    ? await readStreamedResult(response, (object) => decodeActionReference(object), reviveElements)
+    ? await readStreamedResult(
+        response,
+        (object) => decodeTemporary(object) ?? decodeActionReference(object),
+        reviveElements,
+      )
     : null;
   const payload =
     streamed?.payload ?? ((await response.json()) as { result?: unknown; redirect?: string });
@@ -245,7 +276,9 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
       decodeReference: (object, ancestors) =>
         elements.has(object)
           ? elements.get(object)
-          : (streamed?.reference(object, ancestors) ?? decodeActionReference(object)),
+          : (streamed?.reference(object, ancestors) ??
+            decodeTemporary(object) ??
+            decodeActionReference(object)),
     });
   } finally {
     // Promises settle into what the result holds, so they start once it is decoded.

@@ -80,6 +80,7 @@ whose own props are `p`. An object with any other keys is data.
 | `L` | a layout tree's outlet, where the page renders                             | `n`: the outlet's name, `children` for the page                                                                                                                         |
 | `F` | a `FormData` action argument                                               | its index among the call's attachments                                                                                                                                  |
 | `K` | a `Blob` or `File` action argument                                         | its index among the call's attachments                                                                                                                                  |
+| `t` | a value an action argument held that the codec cannot carry                | its index in the call; the action receives a stand-in it can only return, and the browser gets its own value back                                                       |
 
 The browser resolves `r` first (from its value store), then decodes the rest. Inside `o`, only
 the object's properties are read; the object itself is never a tag. Unknown tags are errors.
@@ -158,7 +159,12 @@ the `$F_BOUND` field. Arguments that hold `FormData` or files anywhere (as `useA
 attachment `n` is `{"$":"F","v":n}` or `{"$":"K","v":n}` in it, a file travels as field `$F_n`
 and a `FormData`'s fields as `$F_n_<name>`. The response is JSON: `{"result":…tagged…}` or `{"redirect":"/path"}`. A result that holds promises or streams answers `application/x-ndjson` instead: the first line is `{"result":…}`, with each promise as `{"$":"T","v":name}` and each stream as `W` on the promise of its first step (as in props); each later line settles one promise, `{"p":name,"v":{"v":value}}` or `{"p":name,"e":1}` for a rejection, whose reason stays on the server. Elements in a settled value travel as `x`, rendered when the value settles. A promise or stream met again keeps its first name. A settled value continues the containers above the promise where it was first met, so a `C` inside counts up through them (the `{"v":…}` wrapper counts as one level); a stream's next step continues the stream's containers, not the step before it. In props, a promise or stream met again in the same island keeps its first name too, and its settled value (a `f/promise` script's `v`) continues the containers above it the same way.
 Arguments may contain actions (`a`, with `b` when they carry sealed values) the server
-registered; never `r` or `s`. The browser runs calls one at a time, in order, and refreshes the
+registered; never `r` or `s`. A value the codec cannot carry (an element, a function that is not
+an action, a class instance other than a promise or stream, a local symbol) travels as `t`, its
+index in the call, as React Server Components send a temporary reference. The action receives a
+stand-in: reading or changing it throws, and so does passing it to a client component's props. Returned, it goes
+back as the same `t`, and the browser puts its own value there. A stand-in only goes back in the
+result of the call that sent it. The browser runs calls one at a time, in order, and refreshes the
 page after each one (a redirect navigates instead).
 
 **Posted by a form without JavaScript:** React writes the fields while it renders the form, for

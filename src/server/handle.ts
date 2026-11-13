@@ -23,6 +23,7 @@ import {
   SLOT_TAG,
   TAG,
   TAG_VALUE,
+  TEMPORARY_TAG,
   attachmentField,
   readPostedAction,
   stripRuntimeFields,
@@ -32,6 +33,7 @@ import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { createResultEncoder } from "./result-stream";
 import { prepareBlobs } from "./blobs";
+import { createTemporaryReferences } from "./temporary";
 import { isSameOriginRequest, normalizeAllowedOrigin } from "./origin";
 
 const RENDERED_ELEMENTS = Symbol.for("islx.server.rendered-elements");
@@ -130,9 +132,16 @@ function seeOther(location: string): Response {
 
 const STALE = { [ACTION_STALE_HEADER]: "1" };
 
-/** A reference from the browser: only actions, and only ids this server registered. */
-function decodeArgumentReference(object: Record<string, unknown>): unknown {
+/**
+ * A reference from the browser: an action this server registered, or a value the call sent that
+ * the action can only return (a temporary reference).
+ */
+function decodeArgumentReference(
+  object: Record<string, unknown>,
+  temporaries: ReturnType<typeof createTemporaryReferences>,
+): unknown {
   if (object[TAG] === REFERENCE_TAG || object[TAG] === SLOT_TAG) return undefined;
+  if (object[TAG] === TEMPORARY_TAG) return temporaries.decode(object[TAG_VALUE]);
   return decodeActionReference(object);
 }
 
@@ -193,6 +202,9 @@ export async function handleAction(
     }
     let args: unknown[];
     let token: string | undefined;
+    const temporaries = createTemporaryReferences();
+    const decodeArgument = (object: Record<string, unknown>) =>
+      decodeArgumentReference(object, temporaries);
     try {
       const form = contentType.startsWith("multipart/form-data")
         ? await parseForm(request, body)
@@ -224,7 +236,7 @@ export async function handleAction(
             }
             return data;
           }
-          return decodeArgumentReference(object);
+          return decodeArgument(object);
         };
         const decoded = decode(payload.a ?? [], { decodeReference });
         if (!Array.isArray(decoded)) throw new TypeError("arguments must be an array");
@@ -238,7 +250,7 @@ export async function handleAction(
         };
         if (!payload || typeof payload !== "object" || Array.isArray(payload))
           throw new TypeError();
-        const decoded = decode(payload.a ?? [], { decodeReference: decodeArgumentReference });
+        const decoded = decode(payload.a ?? [], { decodeReference: decodeArgument });
         if (!Array.isArray(decoded)) throw new TypeError("arguments must be an array");
         if (payload.b !== undefined && typeof payload.b !== "string") throw new TypeError();
         args = decoded;
@@ -264,7 +276,7 @@ export async function handleAction(
     const results = createResultEncoder((value) =>
       isRenderedElements(value)
         ? { [TAG]: ELEMENT_TAG, [TAG_VALUE]: { s: value.scope, h: value.html } }
-        : undefined,
+        : temporaries.encode(value),
     );
     try {
       await prepareBlobs(ran.result);

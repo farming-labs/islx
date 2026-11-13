@@ -19,6 +19,7 @@ import { RUNTIME_GLOBAL } from "../boot";
 import { PREHYDRATION_SCRIPT } from "../client/prehydration";
 import { encodeActionReference } from "../server/actions";
 import { encodeSentObject, prepareBlobs } from "../server/blobs";
+import { isTemporaryReference } from "../server/temporary";
 import { getBuildDefaults } from "../server/build";
 import { RenderedElements, setActionResultRenderer, type ReactFormState } from "../server/handle";
 import {
@@ -65,6 +66,11 @@ setIslandServerHook({
       ancestors,
       encodeSpecial: (value, above) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
+        if (isTemporaryReference(value)) {
+          throw new TypeError(
+            "a value the browser sent to a server action can be returned to it, but not passed to a client component's props",
+          );
+        }
         const sent = encodeSentObject(value);
         if (sent) return sent;
         const known = value && typeof value === "object" ? named?.get(value) : undefined;
