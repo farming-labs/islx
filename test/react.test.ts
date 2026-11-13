@@ -495,6 +495,33 @@ describe("islands", () => {
     }
   });
 
+  it("hydrate an island React reveals after the document is parsed", async () => {
+    // React batches reveals, so staged Suspense content can still wait once parsing has ended.
+    document.body.innerHTML = `<main><!--$?--><template id="B:0"></template>loading<!--/$--></main><div hidden id="S:0">${await html(h(CounterIsland, { start: 0, label: "revealed" }))}</div>`;
+    const report = vi.fn();
+    const islands = runtime({ report });
+    await act(async () => {
+      await islands.hydrate(document);
+    });
+    expect(islands.rootCount()).toBe(0);
+
+    await act(async () => {
+      const staged = document.getElementById("S:0")!;
+      const main = document.querySelector("main")!;
+      main.replaceChildren(...staged.childNodes);
+      staged.remove();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(islands.rootCount()).toBe(1);
+    });
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>("[data-counter=revealed]")!.click(),
+    );
+    expect(document.querySelector("[data-counter=revealed]")!.textContent).toBe("revealed 1");
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it("keep each island's state with its item when a list loses one, as React keys do", async () => {
     const list = (labels: string[]) =>
       h(
