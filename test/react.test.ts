@@ -189,11 +189,23 @@ const modules: Record<string, Record<string, unknown>> = {
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
 const TriggerIsland = createIsland(Trigger, "/src/trigger.tsx", "Trigger");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
-const NodeIsland = createIsland(
-  ({ node }: { node: { name: string } }) => h("output", null, node.name),
-  "/src/node.tsx",
-  "Node",
-);
+function Cycle({ node, map, set, again }: Record<string, any>) {
+  const [clicks, setClicks] = useState(0);
+  const checks = [
+    node.self === node,
+    node.children[0].parent === node,
+    map.get("me") === map,
+    [...set][0][0] === set,
+    again.self === again && again.big.length === 600,
+  ];
+  return h(
+    "button",
+    { "data-cycle": "", onClick: () => setClicks(clicks + 1) },
+    `${node.name} ${checks.join(" ")} ${clicks}`,
+  );
+}
+modules["/src/cycle.tsx"] = { Cycle };
+const CycleIsland = createIsland(Cycle, "/src/cycle.tsx", "Cycle");
 const PanelIsland = createIsland(Panel, "/src/panel.tsx", "Panel");
 const OuterIsland = createIsland(Outer, "/src/outer.tsx", "Outer");
 const WaitsIsland = createIsland(Waits, "/src/waits.tsx", "Waits");
@@ -549,14 +561,24 @@ describe("islands", () => {
     ).rejects.toThrow("Shows (/src/shows.tsx)");
   });
 
-  it("render without hydrating when a prop refers to itself, instead of overflowing", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const node: { name: string; self?: unknown } = { name: "root" };
+  it("send props that refer to themselves, as React Server Components do", async () => {
+    type Node = { name: string; self?: Node; children: Array<{ parent: Node }>; big: string };
+    const node: Node = { name: "root", children: [], big: "x".repeat(600) };
     node.self = node;
-    const markup = await html(h(NodeIsland, { node }));
-    expect(markup).toContain("<output>root</output>");
-    expect(markup).not.toContain("<f-island");
-    expect(warn.mock.calls[0]![0]).toContain("circular values are not serializable");
+    node.children.push({ parent: node });
+    const map = new Map<string, unknown>();
+    map.set("me", map);
+    const set = new Set<unknown>();
+    set.add([set]);
+    const markup = await html(h(CycleIsland, { node, map, set, again: node }));
+    expect(markup).toContain("<f-island");
+    expect(markup).toContain("root true true true true true 0");
+    expect(markup).toContain('{"$":"C","v":1}');
+    expect(markup).toContain('type="f/value"');
+    await mount(markup);
+    const button = document.querySelector<HTMLButtonElement>("[data-cycle]")!;
+    await act(async () => button.click());
+    expect(button.textContent).toBe("root true true true true true 1");
   });
 });
 

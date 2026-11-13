@@ -93,6 +93,22 @@ describe("values sent once", () => {
     expect(value.id).toBe(1n);
   });
 
+  it("sends a value that contains itself as the number of levels up to it", () => {
+    const node: Record<string, unknown> = { name: "root" };
+    node.self = node;
+    node.children = [{ parent: node }];
+    const map = new Map<string, unknown>([["me", null]]);
+    map.set("me", map);
+    const set = new Set<unknown>();
+    set.add([set]);
+    const shared = { a: 1 };
+    expect(addressValues({ node, map, set, pair: [shared, shared] }).json).toBe(
+      '{"node":{"name":"root","self":{"$":"C","v":1},"children":[{"parent":{"$":"C","v":3}}]},' +
+        '"map":{"$":"M","v":[["me",{"$":"C","v":1}]]},"set":{"$":"S","v":[[{"$":"C","v":2}]]},' +
+        '"pair":[{"a":1},{"a":1}]}',
+    );
+  });
+
   it("wraps app data that looks like a tag", () => {
     const lookalike = { $: "r", v: "04jiw29097x8ki" };
     const { value } = read(

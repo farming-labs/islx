@@ -322,6 +322,36 @@ describe("server tree pages", () => {
     );
   });
 
+  it("sends a client component a prop that refers to itself, as React Server Components do", async () => {
+    type Node = { name: string; self?: Node };
+    function CycleSource({ node }: { node: Node }) {
+      const [clicks, setClicks] = useState(0);
+      return (
+        <button id="cycle" onClick={() => setClicks(clicks + 1)}>
+          {`${node.name} ${node.self === node} ${clicks}`}
+        </button>
+      );
+    }
+    modules["/src/cycle.tsx"] = { Cycle: CycleSource };
+    const Cycle = createIsland(CycleSource, "/src/cycle.tsx", "Cycle", "load");
+    const node: Node = { name: "root" };
+    node.self = node;
+    async function Page() {
+      return (
+        <>
+          <Cycle node={node} />
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    expect(html).toContain('<f-island src="/src/cycle.tsx"');
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    await click(container, "#cycle");
+    expect(container.querySelector("#cycle")!.textContent).toBe("root true 1");
+  });
+
   it("wraps the nearest element outside a table when a cell cannot be represented", async () => {
     function Cell() {
       useState(0);
