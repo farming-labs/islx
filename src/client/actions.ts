@@ -226,7 +226,7 @@ async function call(reference: ClientReference, args: unknown[]): Promise<unknow
   if (!response.ok) throw new Error(`Server action failed: ${response.status}`);
   // A result with promises or streams in it streams: its first line is the result.
   const streamed = (response.headers.get("content-type") ?? "").startsWith(RESULT_STREAM_TYPE)
-    ? await readStreamedResult(response, (object) => decodeActionReference(object))
+    ? await readStreamedResult(response, (object) => decodeActionReference(object), reviveElements)
     : null;
   const payload =
     streamed?.payload ?? ((await response.json()) as { result?: unknown; redirect?: string });

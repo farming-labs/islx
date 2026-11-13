@@ -1129,6 +1129,69 @@ describe("actions in islands", () => {
     expect(runs).toHaveBeenCalledTimes(1);
   });
 
+  it("render the elements in the promises and streams an action returns, inside the framework's run", async () => {
+    const { AsyncLocalStorage } = await import("node:async_hooks");
+    const request = new AsyncLocalStorage<string>();
+    // A server component that reads the request, as one calling cookies() would.
+    async function Greeting({ name }: { name: string }) {
+      await Promise.resolve();
+      return h("em", null, `${name} for ${request.getStore() ?? "nobody"}`);
+    }
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+    const greet = async () => ({
+      later: tick().then(() => h(Greeting, { name: "later" })),
+      rows: (async function* () {
+        await tick();
+        yield h(Greeting, { name: "row" });
+      })(),
+    });
+    registerServerReference(greet, "island-greet-elements");
+    function Greeter({ action }: { action: () => Promise<unknown> }) {
+      const [shown, setShown] = useState<ReactNode[]>([]);
+      return h(
+        "div",
+        null,
+        h(
+          "button",
+          {
+            "data-greet": "",
+            onClick: async () => {
+              const result = (await action()) as {
+                later: Promise<ReactNode>;
+                rows: AsyncIterator<ReactNode>;
+              };
+              const later = await result.later;
+              const row = (await result.rows.next()).value;
+              setShown([h("p", { key: "later" }, later), h("p", { key: "row" }, row)]);
+            },
+          },
+          "greet",
+        ),
+        h("output", { "data-greetings": "" }, shown),
+      );
+    }
+    modules["/src/greeter.tsx"] = { Greeter };
+    const GreeterIsland = createIsland(Greeter, "/src/greeter.tsx", "Greeter");
+    const markup = await html(h(GreeterIsland, { action: greet }));
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+        { run: (_request, action) => request.run("kinfe", action) },
+      ),
+    );
+    await mount(markup);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-greet]")!.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(document.querySelector("[data-greetings]")?.textContent).toBe(
+        "later for kinferow for kinfe",
+      );
+    });
+  });
+
   it("report a server form's submit to useFormStatus in an island inside it", async () => {
     const save = async (_form: FormData) => {};
     registerServerReference(save, "island-save");
