@@ -27,7 +27,7 @@ import {
   readPostedAction,
   stripRuntimeFields,
 } from "../protocol/wire";
-import { decodeActionReference, resolveAction, type ResolvedAction } from "./actions";
+import { decodeActionReference, prepareSeals, resolveAction, type ResolvedAction } from "./actions";
 import { describeAction, getServerHooks, type ActionInfo } from "./hooks";
 import { BodyTooLargeError, parseForm, readBody } from "./body";
 import { createResultEncoder } from "./result-stream";
@@ -268,6 +268,7 @@ export async function handleAction(
     );
     try {
       await prepareBlobs(ran.result);
+      await prepareSeals(ran.result);
       const result = results.encode(ran.result);
       if (!results.streams) return json({ result });
       const report =

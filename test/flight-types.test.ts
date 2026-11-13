@@ -2,7 +2,14 @@
 // Node's Blob and FormData read their bytes; jsdom's cannot.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServerReference } from "@farm.js/islx/client";
-import { handleAction, registerServerReference } from "@farm.js/islx/server";
+import {
+  bindInlineAction,
+  configureActionKeys,
+  generateActionKey,
+  handleAction,
+  registerInlineAction,
+  registerServerReference,
+} from "@farm.js/islx/server";
 
 function serve(options: Parameters<typeof handleAction>[1] = {}) {
   // The action client runs in a browser, where the page has a location.
@@ -59,5 +66,32 @@ describe("an action's result", () => {
     expect(result.form.get("name")).toBe("kinfe");
     expect(await (result.form.get("file") as Blob).text()).toBe("bytes");
     expect(await (await result.later).text()).toBe("later");
+  });
+
+  it("send an inline action with captured values, sealed before the result is encoded", async () => {
+    configureActionKeys({ key: generateActionKey() });
+    registerInlineAction(
+      async ([prefix]: unknown[], name: unknown) => `${prefix} ${name}`,
+      "flight-greet",
+      1,
+    );
+    const greet = (prefix: string) => bindInlineAction("flight-greet", () => [prefix], ["prefix"]);
+    const make = async () => ({
+      greet: greet("hello"),
+      later: Promise.resolve(greet("later")),
+      all: (function* () {
+        yield greet("each");
+      })(),
+    });
+    registerServerReference(make, "flight-inline");
+    serve();
+    const result = (await createServerReference("flight-inline")()) as {
+      greet: (name: string) => Promise<string>;
+      later: Promise<(name: string) => Promise<string>>;
+      all: Iterable<(name: string) => Promise<string>>;
+    };
+    expect(await result.greet("kinfe")).toBe("hello kinfe");
+    expect(await (await result.later)("kinfe")).toBe("later kinfe");
+    expect(await [...result.all][0]!("kinfe")).toBe("each kinfe");
   });
 });

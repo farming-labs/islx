@@ -17,6 +17,7 @@ import {
   TAG_VALUE,
   formFieldName,
 } from "../protocol/wire";
+import { readIterator } from "../protocol/codec";
 import { getBuildDefaults } from "./build";
 import {
   type ActionKeys,
@@ -168,10 +169,24 @@ function pendingNested(values: unknown[]): Settled<string>[] {
         visit(entry);
       }
     } else if (value instanceof Set) for (const entry of value) visit(entry);
-    else for (const entry of Object.values(value)) visit(entry);
+    else (readIterator(value) ?? Object.values(value)).forEach(visit);
   };
   values.forEach(visit);
   return pending;
+}
+
+/**
+ * Seals the values of the actions in `value` (an action's result), so encoding it, which is
+ * synchronous, reads them sealed. Null when nothing is sealing.
+ */
+export function prepareSeals(value: unknown): Promise<void> | null {
+  const pending = pendingNested([value]);
+  if (pending.length === 0) return null;
+  return (async () => {
+    for (let next = pending; next.length > 0; next = pendingNested([value])) {
+      await Promise.all(next);
+    }
+  })();
 }
 
 /**
