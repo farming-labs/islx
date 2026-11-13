@@ -6,7 +6,7 @@
 import { encode } from "../protocol/codec";
 import { getStreamKind, toStreamSteps } from "../protocol/stream";
 import { PROMISE_TAG, STREAM_KIND_FIELD, STREAM_TAG, TAG, TAG_VALUE } from "../protocol/wire";
-import { encodeActionReference } from "./actions";
+import { encodeActionReference, prepareSeals } from "./actions";
 import { encodeSentObject, prepareBlobs } from "./blobs";
 
 interface Pending {
@@ -91,6 +91,7 @@ export function createResultEncoder(encodeObject: (value: object) => unknown) {
             Promise.resolve(promise)
               .then(async (value) => {
                 await prepareBlobs(value);
+                await prepareSeals(value);
                 return value;
               })
               .then(
