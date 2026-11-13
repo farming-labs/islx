@@ -15,6 +15,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createIsland, useFormStatus } from "@farm.js/islx/react";
 import {
@@ -720,6 +721,60 @@ describe("islands", () => {
     expect(errors()).toEqual([]);
   });
 
+  it("give an island global symbols, errors, iterators, blobs and form data, as React Server Components do", async () => {
+    const errors = spyErrors();
+    // jsdom's Blob cannot read its bytes; servers and browsers have one that can.
+    vi.stubGlobal("Blob", NodeBlob);
+    type Props = {
+      symbol: symbol;
+      error: Error;
+      items: Iterable<ReactNode>;
+      blob: Blob;
+      form: FormData;
+    };
+    function Kinds({ symbol, error, items, blob, form }: Props) {
+      return h(
+        "p",
+        { "data-kinds": "" },
+        String(symbol === Symbol.for("islx.prop")),
+        " ",
+        String(error instanceof Error && !error.message.includes("hunter2")),
+        " ",
+        ...items,
+        " ",
+        `${blob.size} ${String(blob instanceof Blob)}`,
+        " ",
+        String(form.get("name")),
+      );
+    }
+    modules["/src/kinds.tsx"] = { Kinds };
+    const KindsIsland = createIsland(Kinds, "/src/kinds.tsx", "Kinds");
+    const form = new FormData();
+    form.append("name", "kinfe");
+    const markup = await html(
+      h(
+        Suspense,
+        { fallback: null },
+        h(KindsIsland, {
+          symbol: Symbol.for("islx.prop"),
+          error: new Error("database password is hunter2"),
+          items: (function* () {
+            yield "a";
+            yield h("b", { key: "b" }, "b");
+          })(),
+          blob: new Blob(["blob"]),
+          form,
+        }),
+      ),
+    );
+    expect(markup).not.toContain("hunter2");
+    await mount(markup);
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-kinds]")!.textContent).toBe("true true ab 4 true kinfe"),
+    );
+    expect(errors()).toEqual([]);
+  });
+
   it("give a stream prop's chunks to the server render too, elements included", async () => {
     const errors = spyErrors();
     const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -1354,6 +1409,31 @@ describe("actions in islands", () => {
     expect(isValidElement(result.byName.get("now"))).toBe(true);
     expect(isValidElement(await result.byName.get("later"))).toBe(true);
     expect([...result.marks].map((mark) => isValidElement(mark))).toEqual([true]);
+  });
+
+  it("render the elements inside an iterator an action returns", async () => {
+    const make = async () => ({
+      items: (function* () {
+        yield 1;
+        yield h("em", null, "two");
+      })(),
+    });
+    registerServerReference(make, "island-iterator-result");
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) =>
+      handleAction(
+        new Request(url, {
+          ...init,
+          headers: { ...(init.headers as object), origin: new URL(url).origin },
+        }),
+      ),
+    );
+    const { createServerReference } = await import("@farm.js/islx/client");
+    const result = (await createServerReference("island-iterator-result")()) as {
+      items: Iterator<unknown>;
+    };
+    const items = [...(result.items as unknown as Iterable<unknown>)];
+    expect(items[0]).toBe(1);
+    expect(isValidElement(items[1])).toBe(true);
   });
 
   it("render the elements an action returns inside the framework's run, once", async () => {

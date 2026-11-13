@@ -7,6 +7,7 @@ import { encode } from "../protocol/codec";
 import { getStreamKind, toStreamSteps } from "../protocol/stream";
 import { PROMISE_TAG, STREAM_KIND_FIELD, STREAM_TAG, TAG, TAG_VALUE } from "../protocol/wire";
 import { encodeActionReference } from "./actions";
+import { encodeSentObject, prepareBlobs } from "./blobs";
 
 interface Pending {
   name: string;
@@ -43,7 +44,7 @@ export function createResultEncoder(encodeObject: (value: object) => unknown) {
       ancestors,
       encodeFunction: encodeActionReference,
       encodeObject: (object, above) => {
-        const special = encodeObject(object);
+        const special = encodeObject(object) ?? encodeSentObject(object);
         if (special !== undefined) return special;
         const known = named.get(object);
         if (known !== undefined) return known;
@@ -88,6 +89,10 @@ export function createResultEncoder(encodeObject: (value: object) => unknown) {
           watch = ({ name, promise, ancestors, step }) => {
             open++;
             Promise.resolve(promise)
+              .then(async (value) => {
+                await prepareBlobs(value);
+                return value;
+              })
               .then(
                 (value) => {
                   const next = step ? (value as { n?: unknown } | null)?.n : undefined;

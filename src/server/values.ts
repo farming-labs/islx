@@ -3,7 +3,7 @@
  * hash of their JSON, and which of those a response leaves out because the browser already holds
  * them. The browser side is `@farm.js/islx/client` (`getValueStore`).
  */
-import { encodeLeaf, needsObjectTag } from "../protocol/codec";
+import { encodeLeaf, needsObjectTag, readIterator } from "../protocol/codec";
 import {
   CYCLE_TAG,
   MAX_HELD_VALUES,
@@ -111,6 +111,12 @@ export function addressValues(
         typeof value === "string" && json.length >= minLength ? reference(json, [], parent) : json,
         json.length,
       ];
+    }
+    const entries = encoded ? undefined : readIterator(value);
+    if (entries) {
+      // The entries array is the encoder's own, not a level of the app's.
+      const [json, length] = encode(entries, parent, 1);
+      return [`{"$":"i","v":${json}}`, length + 13];
     }
     const depth = inner > 0 ? undefined : depths.get(value);
     if (depth !== undefined) {
