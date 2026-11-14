@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.23
+
+- A rebuilt server tree page keeps its component type across navigations, so the next page of the
+  same layout updates the page on screen in place, as React Server Components do. Before, React
+  unmounted and remounted the whole page on every navigation, losing client state and DOM nodes.
+- A client component whose props hold nothing to split (no server elements, promises or streams)
+  gets them without a copy. Server rendering of island-heavy pages takes about 29% less time on a
+  300-page docs app.
+
 ## 0.0.22
 
 - A client component can receive server HTML in a prop it does not render on the server, such as a
