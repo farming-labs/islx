@@ -960,6 +960,40 @@ describe("element props in islands", () => {
   });
 });
 
+describe("plain props in islands", () => {
+  it("reach the island's server render as the props given, not copies, when nothing in them is split", async () => {
+    const tree = Array.from({ length: 300 }, (_, index) => ({
+      title: `page ${index}`,
+      href: `/docs/p${index}`,
+      tags: index % 2 ? ["a"] : [],
+    }));
+    const seen: unknown[] = [];
+    function Nav({ tree: given }: { tree: typeof tree }) {
+      seen.push(given);
+      return h("nav", null, given.length);
+    }
+    const NavIsland = createIsland(Nav, "/src/plain-nav.tsx", "Nav");
+    const markup = await html(h("div", null, h(NavIsland, { tree }), h(NavIsland, { tree })));
+    expect(seen).toEqual([tree, tree]);
+    expect(seen.every((given) => given === tree)).toBe(true);
+    // Sent once, as one value both islands refer to.
+    expect(markup.split("page 299").length - 1).toBe(1);
+  });
+
+  it("still split a cycle that holds a promise, even when an object inside the cycle is read first", async () => {
+    type Outer = { inner: { back?: Outer }; quote: Promise<string> };
+    const outer: Outer = { inner: {}, quote: Promise.resolve("settled") };
+    outer.inner.back = outer;
+    function Looped({ outer: given }: { outer: Outer }) {
+      return h("p", null, `${given.inner.back === given} ${use(given.quote)}`);
+    }
+    const LoopedIsland = createIsland(Looped, "/src/looped.tsx", "Looped");
+    const markup = await html(h(LoopedIsland, { outer }));
+    expect(markup).toContain("<p>true settled</p>");
+    expect(markup).toMatch(/"quote":\{"\$":"T","v":"[^"]+"\}/);
+  });
+});
+
 describe("client components in an island's server output", () => {
   it("read the island's context, through server components between them", async () => {
     const markup = await html(
