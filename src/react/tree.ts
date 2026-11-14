@@ -1133,27 +1133,38 @@ export async function createServerTreeElement(
   const build = () => createTreePage(tree.payload, tree.json, resolver, undefined, tree.values);
   build();
 
-  function ServerTreePage(): React.ReactNode {
-    const [, setVersion] = React.useState(0);
-    React.useEffect(() => {
-      const listener: TreeUpdateListener = (src, module) => {
-        const changed = updateTreeComponents(tree.components, src, module);
-        if (changed) setVersion((version) => version + 1);
-        return changed;
-      };
-      const listeners = treeListeners();
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    }, []);
-    return build();
-  }
+  return React.createElement(ServerTreePage, {
+    components: tree.components,
+    build,
+    ...(options.key === undefined ? {} : { key: options.key }),
+  });
+}
 
-  return React.createElement(
-    ServerTreePage,
-    options.key === undefined ? null : { key: options.key },
-  );
+/**
+ * Every rebuilt page is this one component type, so the next page of a layout updates the page on
+ * screen in place, as a Flight update does, instead of replacing every node of it.
+ */
+function ServerTreePage({
+  components,
+  build,
+}: {
+  components: Map<string, React.ComponentType<any>>;
+  build: () => React.ReactElement;
+}): React.ReactNode {
+  const [, setVersion] = React.useState(0);
+  React.useEffect(() => {
+    const listener: TreeUpdateListener = (src, module) => {
+      const changed = updateTreeComponents(components, src, module);
+      if (changed) setVersion((version) => version + 1);
+      return changed;
+    };
+    const listeners = treeListeners();
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, [components]);
+  return build();
 }
 
 /** A layout rebuilt from its server tree. */

@@ -487,6 +487,24 @@ describe("server tree pages", () => {
     expect(container.querySelector("#page")!.textContent).toBe("page:updated");
   });
 
+  it("updates the page on screen in place when the next page arrives, as React Server Components do", async () => {
+    const { container, root, ServerHtml } = await hydratePage(
+      await renderPage(<PageButton label="first" />),
+    );
+    const before = container.querySelector("#page");
+    expect(before!.textContent).toBe("first:closed");
+    const source = document.createElement("div");
+    source.innerHTML = await renderPage(<PageButton label="second" />);
+    const next = await createServerTreeElement(source.querySelector("#page-root")!.innerHTML, {
+      load,
+      ServerHtml,
+    });
+    await act(async () => root.render(routeTree(next)));
+    expect(container.querySelector("#page")!.textContent).toBe("second:closed");
+    // The same client component at the same place keeps its DOM node, as a Flight update does.
+    expect(container.querySelector("#page")).toBe(before);
+  });
+
   it("returns null for a page without a server tree", async () => {
     const { ServerHtml } = createClientRuntime();
     expect(await createServerTreeElement("<p>static</p>", { load, ServerHtml })).toBe(null);
