@@ -388,6 +388,40 @@ function Slot({
  * island (`children`, or any element prop) renders once inside `<f-slot>`, and travels as a
  * reference to it, so the browser reads its HTML from the page instead of receiving it twice.
  */
+/**
+ * Whether `value` is a primitive, or plain objects and arrays of them all the way down: nothing in
+ * it is an element, a promise, a stream, an iterator, an error, a map or a set. `memo` holds the
+ * answer for each object met in one walk. An object met again while it is being read is a cycle:
+ * it counts as not plain, so cyclic props take the copying path, which keeps the cycle's copies.
+ */
+function isPlain(value: unknown, memo: Map<object, boolean>): boolean {
+  if (!value || typeof value !== "object") return true;
+  const known = memo.get(value);
+  if (known !== undefined) return known;
+  memo.set(value, false);
+  if (Array.isArray(value)) {
+    for (const entry of value) if (!isPlain(entry, memo)) return false;
+    memo.set(value, true);
+    return true;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (prototype !== Object.prototype && prototype !== null) ||
+    isElement(value) ||
+    isThenable(value) ||
+    Symbol.asyncIterator in value ||
+    Symbol.iterator in value
+  ) {
+    return false;
+  }
+  for (const key in value) {
+    if (!Object.hasOwn(value, key)) continue;
+    if (!isPlain((value as Record<string, unknown>)[key], memo)) return false;
+  }
+  memo.set(value, true);
+  return true;
+}
+
 function splitSlots(
   value: unknown,
   prefix: string,
@@ -395,7 +429,11 @@ function splitSlots(
   // The copies of the objects above `value`: one that contains itself contains its copy, so the
   // props render and travel with the same cycle.
   copies: Map<object, { render: unknown; wire: unknown }> = new Map(),
+  plain: Map<object, boolean> = new Map(),
 ): { render: unknown; wire: unknown } {
+  // Most props hold nothing to split (a navigation tree, a product list): they render and travel
+  // as they are, without two copies of every object in them.
+  if (isPlain(value, plain)) return { render: value, wire: value };
   if (isElement(value)) {
     const name = `${prefix}${slots.next++}`;
     const reference: Record<string, unknown> = { [TAG]: SLOT_TAG, [TAG_VALUE]: name };
@@ -444,7 +482,7 @@ function splitSlots(
     const copy = { render: [] as unknown[], wire: [] as unknown[] };
     copies.set(value, copy);
     for (const entry of value) {
-      const part = splitSlots(entry, prefix, slots, copies);
+      const part = splitSlots(entry, prefix, slots, copies, plain);
       copy.render.push(part.render);
       copy.wire.push(part.wire);
     }
@@ -459,14 +497,14 @@ function splitSlots(
     copies.set(value, copy);
     if (value instanceof Map) {
       for (const [key, entry] of value) {
-        const k = splitSlots(key, prefix, slots, copies);
-        const v = splitSlots(entry, prefix, slots, copies);
+        const k = splitSlots(key, prefix, slots, copies, plain);
+        const v = splitSlots(entry, prefix, slots, copies, plain);
         (copy.render as Map<unknown, unknown>).set(k.render, v.render);
         (copy.wire as Map<unknown, unknown>).set(k.wire, v.wire);
       }
     } else {
       for (const entry of value) {
-        const part = splitSlots(entry, prefix, slots, copies);
+        const part = splitSlots(entry, prefix, slots, copies, plain);
         (copy.render as Set<unknown>).add(part.render);
         (copy.wire as Set<unknown>).add(part.wire);
       }
@@ -500,7 +538,7 @@ function splitSlots(
   // iterator over them, and the browser gets another.
   const entries = readIterator(value);
   if (entries) {
-    const part = splitSlots(entries, prefix, slots, copies) as {
+    const part = splitSlots(entries, prefix, slots, copies, plain) as {
       render: unknown[];
       wire: unknown[];
     };
@@ -516,7 +554,7 @@ function splitSlots(
   };
   copies.set(value, copy);
   for (const [key, entry] of Object.entries(value)) {
-    const part = splitSlots(entry, prefix, slots, copies);
+    const part = splitSlots(entry, prefix, slots, copies, plain);
     copy.render[key] = part.render;
     copy.wire[key] = part.wire;
   }
