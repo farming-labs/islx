@@ -211,8 +211,10 @@ const VOID_ELEMENTS = new Set([
 ]);
 
 /**
- * A slot whose server output is one host element. The element keeps its server HTML inside, and a
- * client component that clones the slot (`asChild`) gives its props to the element itself.
+ * A slot whose server output is one host element. A client component that clones the slot
+ * (`asChild`, `render`) gives its props to the element itself. The element keeps its server HTML
+ * inside, unless the clone gives it children: those replaced the element's children on the server,
+ * and render here instead.
  */
 function HostSlot({
   name,
@@ -220,13 +222,15 @@ function HostSlot({
   html,
   ...given
 }: { name: string; host: SlotHostReference; html: string } & Record<string, unknown>) {
+  const props = mergeSlotHostProps(host.p, given);
+  const keepsHtml = !VOID_ELEMENTS.has(host.t) && props.children == null;
   return React.createElement(
     SLOT_ELEMENT,
     { name, style: { display: "contents" }, suppressHydrationWarning: true },
     React.createElement(host.t, {
-      ...mergeSlotHostProps(host.p, given),
+      ...props,
       suppressHydrationWarning: true,
-      ...(VOID_ELEMENTS.has(host.t) ? {} : { dangerouslySetInnerHTML: { __html: html } }),
+      ...(keepsHtml ? { dangerouslySetInnerHTML: { __html: html } } : {}),
     }),
   );
 }
