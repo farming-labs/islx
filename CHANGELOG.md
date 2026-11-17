@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.24
+
+- A client component in a server tree that clones server HTML it receives, as Base UI's `render`
+  and Radix's `asChild` do, renders it with the props it gives. `<Button render={<Link />}>Read
+  the docs</Button>`, where `Link` is server HTML (Farm's `Link`), renders the styled link with its
+  text. Before, the server dropped those props and rendered an empty link, and a navigation to such
+  a page threw React error #60 in the browser.
+- A payload-only navigation to a page whose client component receives server HTML as a prop sends
+  the whole page, so that HTML arrives with the props the clone gives it.
+
 ## 0.0.23
 
 - A rebuilt server tree page keeps its component type across navigations, so the next page of the
