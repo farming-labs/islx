@@ -101,7 +101,24 @@ function CounterSource() {
   );
 }
 
+// Clone their element with props of their own under the element's, as Base UI's `render` and
+// Radix's `asChild` do.
+function RenderButtonSource({
+  render,
+  children,
+}: {
+  render: React.ReactElement<Record<string, unknown>>;
+  children: ReactNode;
+}) {
+  return React.cloneElement(render, { className: "button", children, ...render.props });
+}
+function SlotButtonSource({ children }: { children: React.ReactElement<Record<string, unknown>> }) {
+  return React.cloneElement(children, { className: "slot", ...children.props });
+}
+
 const modules: Record<string, Record<string, unknown>> = {
+  "/src/render-button.tsx": { RenderButton: RenderButtonSource },
+  "/src/slot-button.tsx": { SlotButton: SlotButtonSource },
   "/src/page-button.tsx": { PageButton: PageButtonSource },
   "/src/card.tsx": { Card: CardSource },
   "/src/stars.tsx": { Stars: StarsSource },
@@ -118,6 +135,13 @@ const Stars = createIsland(StarsSource, "/src/stars.tsx", "Stars", "load");
 const Callback = createIsland(CallbackSource, "/src/callback.tsx", "Callback", "load");
 const Counter = createIsland(CounterSource, "/src/counter.tsx", "Counter", "load");
 const Disclosure = createIsland(DisclosureSource, "/src/disclosure.tsx", "Disclosure", "load");
+const RenderButton = createIsland(
+  RenderButtonSource,
+  "/src/render-button.tsx",
+  "RenderButton",
+  "load",
+);
+const SlotButton = createIsland(SlotButtonSource, "/src/slot-button.tsx", "SlotButton", "load");
 
 // --- server components --------------------------------------------------------------------------
 
@@ -160,6 +184,30 @@ async function HomePage() {
     </Frame>
   );
 }
+
+// Calls a hook, so a server tree keeps it as server HTML, as it keeps Farm's Link.
+function ServerLink(props: React.ComponentProps<"a">) {
+  useId();
+  return <a {...props} />;
+}
+
+async function LinkPage() {
+  return (
+    <>
+      <RenderButton render={<ServerLink href="/docs" />}>Read the docs</RenderButton>
+      <SlotButton>
+        <ServerLink href="/blog">Blog</ServerLink>
+      </SlotButton>
+    </>
+  );
+}
+
+const CLONED_LINKS = [
+  '<a href="/docs" class="button">Read the docs</a>',
+  '<a href="/blog" class="slot">Blog</a>',
+];
+const clonedLinks = (container: Element) =>
+  Array.from(container.querySelectorAll("#page-root f-html > a"), (link) => link.outerHTML);
 
 // --- harness ------------------------------------------------------------------------------------
 
@@ -505,48 +553,24 @@ describe("server tree pages", () => {
     expect(container.querySelector("#page")).toBe(before);
   });
 
-  it("keeps server HTML a client component clones when the next page arrives", async () => {
-    function ServerLink({ href }: { href: string }) {
-      useId();
-      return <a href={href} />;
-    }
-    // Clones its element with its own props under the element's, as Base UI's `render` does.
-    function RenderButtonSource({
-      render,
-      children,
-    }: {
-      render: React.ReactElement<Record<string, unknown>>;
-      children: ReactNode;
-    }) {
-      return React.cloneElement(render, { className: "button", children, ...render.props });
-    }
-    modules["/src/render-button.tsx"] = { RenderButton: RenderButtonSource };
-    const RenderButton = createIsland(
-      RenderButtonSource,
-      "/src/render-button.tsx",
-      "RenderButton",
-      "load",
-    );
-    async function LinkPage() {
-      return <RenderButton render={<ServerLink href="/docs" />}>Read the docs</RenderButton>;
-    }
-    const linkHtml = await renderPage(<LinkPage />);
-    expect(linkHtml).toMatch(/<f-html name="0"[^>]*><a href="\/docs"><\/a><\/f-html>/);
+  it("renders server HTML a client component clones with the props it gives, on load and on the next page", async () => {
+    const html = await renderPage(<LinkPage />);
+    const loaded = await hydratePage(html);
+    expect(loaded.errors).toEqual([]);
+    expect(clonedLinks(loaded.container)).toEqual(CLONED_LINKS);
 
     const { container, errors, root, ServerHtml } = await hydratePage(
       await renderPage(<PageButton label="first" />),
     );
     const source = document.createElement("div");
-    source.innerHTML = linkHtml;
+    source.innerHTML = html;
     const next = await createServerTreeElement(source.querySelector("#page-root")!.innerHTML, {
       load,
       ServerHtml,
     });
     await act(async () => root.render(routeTree(next)));
     expect(errors).toEqual([]);
-    expect(container.querySelector("#page-root")!.innerHTML).toMatch(
-      /^<f-html name="0" style="display: contents;"><a href="\/docs"><\/a><\/f-html>/,
-    );
+    expect(clonedLinks(container)).toEqual(CLONED_LINKS);
   });
 
   it("returns null for a page without a server tree", async () => {
@@ -731,6 +755,23 @@ describe("server tree pages", () => {
       await stream.allReady;
       const html = await new Response(stream).text();
       expect(html).not.toContain('type="f/tree" partial');
+    });
+
+    it("renders the page whole when a client component receives server HTML it may clone", async () => {
+      const html = await renderRoute(<LinkPage />, true);
+      expect(html).not.toContain('type="f/tree" partial');
+      expect(clonedLinks(await rebuild(html))).toEqual(CLONED_LINKS);
+
+      // Server HTML deeper inside a prop is not the element a clone changes.
+      const nested = await renderRoute(
+        <Card title="card">
+          <p>
+            <ServerLink href="/docs">docs</ServerLink>
+          </p>
+        </Card>,
+        true,
+      );
+      expect(nested).toContain('type="f/tree" partial');
     });
   });
 });
