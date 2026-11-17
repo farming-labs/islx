@@ -505,6 +505,50 @@ describe("server tree pages", () => {
     expect(container.querySelector("#page")).toBe(before);
   });
 
+  it("keeps server HTML a client component clones when the next page arrives", async () => {
+    function ServerLink({ href }: { href: string }) {
+      useId();
+      return <a href={href} />;
+    }
+    // Clones its element with its own props under the element's, as Base UI's `render` does.
+    function RenderButtonSource({
+      render,
+      children,
+    }: {
+      render: React.ReactElement<Record<string, unknown>>;
+      children: ReactNode;
+    }) {
+      return React.cloneElement(render, { className: "button", children, ...render.props });
+    }
+    modules["/src/render-button.tsx"] = { RenderButton: RenderButtonSource };
+    const RenderButton = createIsland(
+      RenderButtonSource,
+      "/src/render-button.tsx",
+      "RenderButton",
+      "load",
+    );
+    async function LinkPage() {
+      return <RenderButton render={<ServerLink href="/docs" />}>Read the docs</RenderButton>;
+    }
+    const linkHtml = await renderPage(<LinkPage />);
+    expect(linkHtml).toMatch(/<f-html name="0"[^>]*><a href="\/docs"><\/a><\/f-html>/);
+
+    const { container, errors, root, ServerHtml } = await hydratePage(
+      await renderPage(<PageButton label="first" />),
+    );
+    const source = document.createElement("div");
+    source.innerHTML = linkHtml;
+    const next = await createServerTreeElement(source.querySelector("#page-root")!.innerHTML, {
+      load,
+      ServerHtml,
+    });
+    await act(async () => root.render(routeTree(next)));
+    expect(errors).toEqual([]);
+    expect(container.querySelector("#page-root")!.innerHTML).toMatch(
+      /^<f-html name="0" style="display: contents;"><a href="\/docs"><\/a><\/f-html>/,
+    );
+  });
+
   it("returns null for a page without a server tree", async () => {
     const { ServerHtml } = createClientRuntime();
     expect(await createServerTreeElement("<p>static</p>", { load, ServerHtml })).toBe(null);

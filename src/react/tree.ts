@@ -718,6 +718,15 @@ function RenderedServerHtml({
   return children;
 }
 
+/**
+ * A server HTML part in the browser. A client component that clones the part (`asChild`, `render`)
+ * gives its props to this component, as it gives them to `RenderedServerHtml` on the server, so
+ * they never reach the part's `<f-html>`, whose content is the server's HTML.
+ */
+function ServerHtmlPart({ children }: { children?: React.ReactNode }): React.ReactNode {
+  return children;
+}
+
 // Renders after its client component, so the parts that component rendered are known by then; a
 // part rendered later, by a part of it that suspended first, renders in both places.
 function UnrenderedServerHtml({
@@ -1061,14 +1070,17 @@ async function prepareTree(
       serverHtml(id, key) {
         const html = serverHtml.get(id);
         if (html === undefined) throw new Error(`server HTML ${id} was not found`);
-        return React.createElement(options.ServerHtml, {
-          ...(key === null ? {} : { key }),
-          as: SERVER_HTML_TAG,
-          [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
-          style: { display: "contents" },
-          suppressHydrationWarning: true,
-          dangerouslySetInnerHTML: { __html: html },
-        });
+        return React.createElement(
+          ServerHtmlPart,
+          key === null ? null : { key },
+          React.createElement(options.ServerHtml, {
+            as: SERVER_HTML_TAG,
+            [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
+            style: { display: "contents" },
+            suppressHydrationWarning: true,
+            dangerouslySetInnerHTML: { __html: html },
+          }),
+        );
       },
       unrendered(ids) {
         const id = ids.find((candidate) => templates.has(candidate));
