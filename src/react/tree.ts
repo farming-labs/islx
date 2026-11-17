@@ -181,6 +181,15 @@ interface ResolveState {
   chunks: Map<number, { encoded: Promise<TreeValue>; chunk?: ResolvedChunk }>;
   /** Server actions the tree passes, by id: the server renders them as themselves. */
   actions: Map<string, unknown>;
+  /**
+   * Whether a client component receives a server HTML part as a prop, which it may clone with
+   * props of its own (`asChild`, `render`): only rendering that component shows the part then.
+   */
+  clonableParts?: true;
+}
+
+function isServerHtmlPart(value: TreeValue): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && value.$ === "x";
 }
 
 function serverHtmlNode(
@@ -352,6 +361,7 @@ async function resolveElement(
       if (children !== undefined) {
         resolved.children = await resolveValue(state, children, context, new Set());
       }
+      if (Object.values(resolved).some(isServerHtmlPart)) state.clonableParts = true;
       state.components.set(
         `${clientReference.src}#${clientReference.exportName}`,
         clientReference.Component,
@@ -632,7 +642,8 @@ function readTreeValueScripts(script: Element): TreeValueScripts {
  * The page as a navigation the browser renders itself receives it: its payload, every chunk's
  * payload, and the server HTML parts, with none of the HTML the payload rebuilds. Waits for every
  * chunk, since a navigation reads the whole response anyway. Returns null when a chunk failed,
- * so the page renders as usual and its error boundaries apply.
+ * so the page renders as usual and its error boundaries apply, and when a client component
+ * receives a server HTML part as a prop, which only rendering that component shows.
  */
 async function createPayloadOnlyPage(
   state: ResolveState,
@@ -652,6 +663,7 @@ async function createPayloadOnlyPage(
     }
     pending = [...state.chunks.keys()].filter((id) => !chunks.has(id));
   }
+  if (state.clonableParts) return null;
   return React.createElement(
     React.Fragment,
     null,
@@ -705,26 +717,13 @@ function scopedName(scope: string | undefined, id: number): string {
   return scope ? `${scope}:${id}` : String(id);
 }
 
-function RenderedServerHtml({
-  id,
-  rendered,
-  children,
-}: {
-  id: number;
-  rendered: Set<number>;
-  children?: React.ReactNode;
-}): React.ReactNode {
-  rendered.add(id);
-  return children;
-}
-
 /**
  * A server HTML part in the browser. A client component that clones the part (`asChild`, `render`)
- * gives its props to this component, as it gives them to `RenderedServerHtml` on the server, so
- * they never reach the part's `<f-html>`, whose content is the server's HTML.
+ * gives its props to this component, so they never reach the part's `<f-html>`: the server already
+ * rendered them into its HTML.
  */
-function ServerHtmlPart({ children }: { children?: React.ReactNode }): React.ReactNode {
-  return children;
+function ServerHtmlPart({ element }: { element: React.ReactElement }): React.ReactNode {
+  return element;
 }
 
 // Renders after its client component, so the parts that component rendered are known by then; a
@@ -756,23 +755,45 @@ function createServerHtmlParts(
   isolate: (element: React.ReactNode) => React.ReactNode,
 ): Pick<TreeResolver, "serverHtml" | "unrendered"> {
   const rendered = new Set<number>();
-  const part = (id: number, key: string | null): React.ReactElement =>
-    React.createElement(
+  const part = (
+    id: number,
+    key: string | null,
+    props?: Record<string, unknown>,
+  ): React.ReactElement => {
+    const node = state.serverHtml.get(id) as React.ReactNode;
+    return React.createElement(
       SERVER_HTML_TAG,
       {
         ...(key === null ? {} : { key }),
         [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
         style: { display: "contents" },
       },
-      isolate(state.serverHtml.get(id) as React.ReactNode),
+      isolate(props && React.isValidElement(node) ? React.cloneElement(node, props) : node),
     );
+  };
+  // Each part renders through a component of its own that carries the props of the element it
+  // stands for. A client component that clones the part merges its props with that element's, as
+  // it would without the part, and the element renders with the result.
+  const components = new Map<number, React.FunctionComponent<Record<string, unknown>>>();
+  const component = (id: number) => {
+    let Part = components.get(id);
+    if (!Part) {
+      Part = (props) => {
+        rendered.add(id);
+        return part(id, null, props);
+      };
+      components.set(id, Part);
+    }
+    return Part;
+  };
   return {
-    serverHtml: (id, key) =>
-      React.createElement(
-        RenderedServerHtml,
-        { ...(key === null ? {} : { key }), id, rendered },
-        part(id, null),
-      ),
+    serverHtml: (id, key) => {
+      const node = state.serverHtml.get(id);
+      return React.createElement(component(id), {
+        ...(React.isValidElement(node) ? (node.props as Record<string, unknown>) : {}),
+        ...(key === null ? {} : { key }),
+      });
+    },
     unrendered: (ids) => React.createElement(UnrenderedServerHtml, { ids, rendered, scope, part }),
   };
 }
@@ -1070,17 +1091,16 @@ async function prepareTree(
       serverHtml(id, key) {
         const html = serverHtml.get(id);
         if (html === undefined) throw new Error(`server HTML ${id} was not found`);
-        return React.createElement(
-          ServerHtmlPart,
-          key === null ? null : { key },
-          React.createElement(options.ServerHtml, {
+        return React.createElement(ServerHtmlPart, {
+          ...(key === null ? {} : { key }),
+          element: React.createElement(options.ServerHtml, {
             as: SERVER_HTML_TAG,
             [SERVER_HTML_ATTRIBUTE]: scopedName(scope, id),
             style: { display: "contents" },
             suppressHydrationWarning: true,
             dangerouslySetInnerHTML: { __html: html },
           }),
-        );
+        });
       },
       unrendered(ids) {
         const id = ids.find((candidate) => templates.has(candidate));
