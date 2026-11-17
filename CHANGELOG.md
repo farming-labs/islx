@@ -9,6 +9,9 @@
   a page threw React error #60 in the browser.
 - A payload-only navigation to a page whose client component receives server HTML as a prop sends
   the whole page, so that HTML arrives with the props the clone gives it.
+- An island that clones a slot of one host element with children of its own, as Base UI's `render`
+  does, renders those children in the browser. Before, the island threw React error #60 when it
+  rendered again, and its server HTML was restored.
 
 ## 0.0.23
 

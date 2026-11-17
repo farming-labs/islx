@@ -176,8 +176,28 @@ function Trigger({ children }: { children?: ReactNode }) {
   });
 }
 
+// Clones its server element with props of its own under the element's, children included, as Base
+// UI's `render` does.
+function RenderTrigger({
+  render,
+  children,
+}: {
+  render: ReactElement<Record<string, unknown>>;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return cloneElement(render, {
+    className: "trigger",
+    "data-state": open ? "open" : "closed",
+    onClick: () => setOpen((value) => !value),
+    children: open ? "Close" : children,
+    ...render.props,
+  });
+}
+
 const modules: Record<string, Record<string, unknown>> = {
   "/src/trigger.tsx": { Trigger },
+  "/src/render-trigger.tsx": { RenderTrigger },
   "/src/counter.tsx": { Counter },
   "/src/waits.tsx": { Waits },
   "/src/quote.tsx": { Quote },
@@ -191,6 +211,7 @@ const modules: Record<string, Record<string, unknown>> = {
 };
 const CounterIsland = createIsland(Counter, "/src/counter.tsx", "Counter");
 const TriggerIsland = createIsland(Trigger, "/src/trigger.tsx", "Trigger");
+const RenderTriggerIsland = createIsland(RenderTrigger, "/src/render-trigger.tsx", "RenderTrigger");
 const ShowsIsland = createIsland(Shows, "/src/shows.tsx", "Shows");
 function Cycle({ node, map, set, again }: Record<string, any>) {
   const [clicks, setClicks] = useState(0);
@@ -305,6 +326,25 @@ describe("islands", () => {
     expect(button.className).toBe("trigger own");
     expect(button.textContent).toBe("Open");
     expect(errors()).toEqual([]);
+  });
+
+  it("give the server element the children a client component clones onto it", async () => {
+    const errors = spyErrors();
+    const markup = await html(
+      h(RenderTriggerIsland, { render: h("a", { href: "#docs" }) }, "Read the docs"),
+    );
+    expect(markup).toContain(
+      '<a href="#docs" class="trigger" data-state="closed">Read the docs</a>',
+    );
+    const islands = await mount(markup);
+    expect(islands.rootCount()).toBe(1);
+    const link = document.querySelector("a")!;
+    // The island renders again with the clone's new children.
+    await act(async () => link.click());
+    expect(errors()).toEqual([]);
+    expect(document.querySelector("a")).toBe(link);
+    expect(link.getAttribute("data-state")).toBe("open");
+    expect(link.textContent).toBe("Close");
   });
 
   it("send a shared value once, and not at all to a browser that holds it", async () => {
