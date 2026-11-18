@@ -1194,6 +1194,53 @@ describe("static HTML in server trees", () => {
     ).rejects.toThrow("static HTML 0 was not found");
   });
 
+  it("renders static children as React does, written out or from a server component", async () => {
+    function Para({ text }: { text: string }) {
+      return (
+        <p className="para" style={{ color: "red" }}>
+          {text}
+        </p>
+      );
+    }
+    async function Page() {
+      return (
+        <>
+          <section id="plain">
+            <p className="para" style={{ color: "red" }}>
+              {PROSE}
+            </p>
+            <span data-n={2}>{3}</span>
+            {null}
+            {false}
+            <>
+              <i>{"fragment"}</i>
+            </>
+          </section>
+          <section id="composed">
+            <Para text={PROSE} />
+          </section>
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    const payload = payloadOf(html);
+    expect(payload).not.toContain(PROSE);
+    const plain = `<p class="para" style="color:red">${PROSE}</p><span data-n="2">3</span><i>fragment</i>`;
+    expect(html).toMatch(new RegExp(`<section id="plain" f-html="\\d+">${plain}</section>`));
+    // The server component's element is static itself; the section around it stays in the tree.
+    expect(payload).toContain('"t":"section","p":{"id":"composed"');
+    expect(html).toMatch(/<section id="composed"><p class="para" style="color:red" f-html="\d+">/);
+
+    const consoleError = vi.spyOn(console, "error");
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    const warnings = consoleError.mock.calls.map((call) => String(call[0]));
+    expect(warnings.filter((warning) => /hydrat|did not match/i.test(warning))).toEqual([]);
+    expect(container.querySelector("#plain")!.innerHTML).toBe(plain);
+    expect(container.querySelector("#composed p")!.textContent).toBe(PROSE);
+  });
+
   it("names a layout's static elements after its scope, apart from the page's", async () => {
     function StaticLayout({ children }: { children: ReactNode }) {
       return (

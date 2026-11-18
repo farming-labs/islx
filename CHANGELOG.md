@@ -9,8 +9,9 @@
   blog-length post under a client provider, the document goes from 20.8 to 9.4 KB brotli and a
   navigation from 14.8 to 9.4 KB.
 - A server tree resolves its synchronous parts without a microtask per element, and decides which
-  elements are static HTML in one pass instead of re-walking each subtree. On that post, the
-  server renders about twice as many requests per second.
+  elements are static HTML in one pass instead of re-walking each subtree. Children made only of
+  host elements and text are not resolved at all: the server renders them as they came. On that
+  post, the server renders about twice as many requests per second.
 
 ## 0.0.24
 
