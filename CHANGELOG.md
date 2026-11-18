@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.25
 
 - A server tree sends static markup once. A host element whose children are plain HTML (no client
   components, Suspense boundaries, actions, form fields or media) leaves its children out of the
