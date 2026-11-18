@@ -508,6 +508,50 @@ describe("server tree pages", () => {
     await expect(renderServerTree(<Page />, {})).rejects.toBe(control);
   });
 
+  it("reports a synchronous throw without leaving an async sibling's rejection unhandled", async () => {
+    const control = new Error("sync");
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      async function Later(): Promise<ReactNode> {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        throw new Error("async");
+      }
+      function Now(): ReactNode {
+        throw control;
+      }
+      const page = (
+        <main>
+          <Later />
+          <Now />
+        </main>
+      );
+      await expect(renderServerTree(page, {})).rejects.toBe(control);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("resolves a synchronous tree in one pass and an async one alongside it", async () => {
+    async function Slow(): Promise<ReactNode> {
+      await Promise.resolve();
+      return <p id="slow">slow</p>;
+    }
+    const html = await renderPage(
+      <Frame>
+        <section>
+          <p id="sync">sync</p>
+          <Slow />
+        </section>
+      </Frame>,
+    );
+    expect(html).toContain('<p id="sync">sync</p>');
+    expect(html).toContain('<p id="slow">slow</p>');
+  });
+
   it("rebuilds a page from navigation HTML and re-renders it on a module update", async () => {
     const html = await renderPage(<HomePage />);
     const container = document.createElement("div");
@@ -1148,6 +1192,53 @@ describe("static HTML in server trees", () => {
         ServerHtml: createClientRuntime().ServerHtml,
       }),
     ).rejects.toThrow("static HTML 0 was not found");
+  });
+
+  it("renders static children as React does, written out or from a server component", async () => {
+    function Para({ text }: { text: string }) {
+      return (
+        <p className="para" style={{ color: "red" }}>
+          {text}
+        </p>
+      );
+    }
+    async function Page() {
+      return (
+        <>
+          <section id="plain">
+            <p className="para" style={{ color: "red" }}>
+              {PROSE}
+            </p>
+            <span data-n={2}>{3}</span>
+            {null}
+            {false}
+            <>
+              <i>{"fragment"}</i>
+            </>
+          </section>
+          <section id="composed">
+            <Para text={PROSE} />
+          </section>
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    const payload = payloadOf(html);
+    expect(payload).not.toContain(PROSE);
+    const plain = `<p class="para" style="color:red">${PROSE}</p><span data-n="2">3</span><i>fragment</i>`;
+    expect(html).toMatch(new RegExp(`<section id="plain" f-html="\\d+">${plain}</section>`));
+    // The server component's element is static itself; the section around it stays in the tree.
+    expect(payload).toContain('"t":"section","p":{"id":"composed"');
+    expect(html).toMatch(/<section id="composed"><p class="para" style="color:red" f-html="\d+">/);
+
+    const consoleError = vi.spyOn(console, "error");
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    const warnings = consoleError.mock.calls.map((call) => String(call[0]));
+    expect(warnings.filter((warning) => /hydrat|did not match/i.test(warning))).toEqual([]);
+    expect(container.querySelector("#plain")!.innerHTML).toBe(plain);
+    expect(container.querySelector("#composed p")!.textContent).toBe(PROSE);
   });
 
   it("names a layout's static elements after its scope, apart from the page's", async () => {
