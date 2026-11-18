@@ -508,6 +508,50 @@ describe("server tree pages", () => {
     await expect(renderServerTree(<Page />, {})).rejects.toBe(control);
   });
 
+  it("reports a synchronous throw without leaving an async sibling's rejection unhandled", async () => {
+    const control = new Error("sync");
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      async function Later(): Promise<ReactNode> {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        throw new Error("async");
+      }
+      function Now(): ReactNode {
+        throw control;
+      }
+      const page = (
+        <main>
+          <Later />
+          <Now />
+        </main>
+      );
+      await expect(renderServerTree(page, {})).rejects.toBe(control);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("resolves a synchronous tree in one pass and an async one alongside it", async () => {
+    async function Slow(): Promise<ReactNode> {
+      await Promise.resolve();
+      return <p id="slow">slow</p>;
+    }
+    const html = await renderPage(
+      <Frame>
+        <section>
+          <p id="sync">sync</p>
+          <Slow />
+        </section>
+      </Frame>,
+    );
+    expect(html).toContain('<p id="sync">sync</p>');
+    expect(html).toContain('<p id="slow">slow</p>');
+  });
+
   it("rebuilds a page from navigation HTML and re-renders it on a module update", async () => {
     const html = await renderPage(<HomePage />);
     const container = document.createElement("div");

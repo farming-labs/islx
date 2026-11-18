@@ -265,16 +265,37 @@ function serverHtmlNode(
   return key === null ? { $: "x", i: id } : { $: "x", i: id, k: String(key) };
 }
 
-/** Whether a resolved value is plain HTML: host elements, fragments and text, nothing to rebuild. */
-function isStaticHtml(value: TreeValue): boolean {
-  if (value === null || typeof value !== "object") return true;
-  if (Array.isArray(value)) return value.every(isStaticHtml);
-  if (value.$ === "f") return isStaticHtml(value.c as TreeValue);
-  if (value.$ !== "h" || DYNAMIC_HTML_TAGS.has(value.t as string)) return false;
-  for (const [name, prop] of Object.entries(value.p as { [key: string]: TreeValue })) {
-    if (name === "children" ? !isStaticHtml(prop) : !isPlainData(prop)) return false;
+/**
+ * Resolved host elements and fragments that are plain HTML (nothing to rebuild), with the JSON
+ * length of their node once any static element inside is inlined. Children resolve before their
+ * parent, so each node is classified once from its children's entries.
+ */
+const staticSizes = /* @__PURE__ */ new WeakMap<object, number>();
+
+/** The JSON length of a resolved value that is plain HTML, or null when it holds anything else. */
+function staticSize(value: TreeValue): number | null {
+  if (value === null || typeof value !== "object") return JSON.stringify(value).length;
+  if (Array.isArray(value)) {
+    let size = value.length + 1;
+    for (const entry of value) {
+      const entrySize = staticSize(entry);
+      if (entrySize === null) return null;
+      size += entrySize;
+    }
+    return size;
   }
-  return true;
+  return staticSizes.get(value) ?? null;
+}
+
+/** Records a fragment as plain HTML when its children are. */
+function classifyStaticFragment(state: ResolveState, node: { [key: string]: TreeValue }) {
+  if (!state.staticHtml) return node;
+  const childrenSize = staticSize(node.c as TreeValue);
+  if (childrenSize !== null) {
+    const { c: _children, ...rest } = node;
+    staticSizes.set(node, JSON.stringify(rest).length + 5 + childrenSize);
+  }
+  return node;
 }
 
 /** Data an attribute renders from as it is (a `style` object, a string): nothing tagged. */
@@ -285,92 +306,139 @@ function isPlainData(value: TreeValue): boolean {
 }
 
 /**
- * `value` with the children of the static elements inside it put back, so only the outermost
- * element is static; their ids go to `inlined`.
+ * `value` with the static elements directly in it (through arrays and fragments) given their
+ * children back, so only the outermost element is static. Deeper ones are inlined already: a
+ * static element that is not itself one holds less than `STATIC_HTML_MIN_JSON`, so none inside.
  */
-function inlineStaticHtml(
-  staticHtml: Map<number, StaticHtml>,
-  value: TreeValue,
-  inlined: number[],
-): TreeValue {
+function inlineStaticHtml(staticHtml: Map<number, StaticHtml>, value: TreeValue): TreeValue {
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value))
-    return value.map((entry) => inlineStaticHtml(staticHtml, entry, inlined));
-  if (value.$ === "f") {
-    return { ...value, c: inlineStaticHtml(staticHtml, value.c as TreeValue, inlined) };
-  }
-  const props = value.p as { [key: string]: TreeValue };
-  if (typeof value.s === "number") {
-    const { s: id, ...element } = value;
-    inlined.push(id);
-    const children = inlineStaticHtml(staticHtml, staticHtml.get(id)!.children, inlined);
-    return { ...element, p: { ...props, children } };
-  }
-  if (props.children === undefined) return value;
-  return {
-    ...value,
-    p: { ...props, children: inlineStaticHtml(staticHtml, props.children, inlined) },
-  };
+  if (Array.isArray(value)) return value.map((entry) => inlineStaticHtml(staticHtml, entry));
+  if (value.$ === "f") return { ...value, c: inlineStaticHtml(staticHtml, value.c as TreeValue) };
+  if (typeof value.s !== "number") return value;
+  const { s: id, ...element } = value;
+  const children = staticHtml.get(id)!.children;
+  staticHtml.delete(id);
+  return { ...element, p: { ...(value.p as { [key: string]: TreeValue }), children } };
 }
 
 /**
- * The id under which a host element's children stay out of the payload, or null when they stay
- * in: they hold anything to rebuild, React manages the element's content, or they are too small
- * to be worth the attribute that names them.
+ * Records a resolved host element as plain HTML when it is one, and returns the id under which its
+ * children stay out of the payload, or null when they stay in: they hold anything to rebuild,
+ * React manages the element's content, the parser treats it specially, or they are too small to be
+ * worth the attribute that names them.
  */
 function staticHtmlId(
   state: ResolveState,
   type: string,
   resolved: { [key: string]: TreeValue },
-): number | null {
+  stub: boolean,
+): { size: number; id: number | null } | null {
   const staticHtml = state.staticHtml;
-  const children = resolved.children;
-  if (!staticHtml || children === undefined || DYNAMIC_HTML_TAGS.has(type)) return null;
-  if ("dangerouslySetInnerHTML" in resolved) return null;
-  for (const [name, prop] of Object.entries(resolved)) {
-    if (name !== "children" && !isPlainData(prop)) return null;
+  if (!staticHtml || DYNAMIC_HTML_TAGS.has(type)) return null;
+  const { children, ...props } = resolved;
+  for (const prop of Object.values(props)) if (!isPlainData(prop)) return null;
+  const childrenSize = children === undefined ? 0 : staticSize(children);
+  if (childrenSize === null) return null;
+  // The node's JSON: `{"$":"h","t":…,"p":{…,"children":…}}`, near enough for a threshold.
+  const size = JSON.stringify(props).length + type.length + 30 + childrenSize;
+  if (!stub || children === undefined || "dangerouslySetInnerHTML" in resolved) {
+    return { size, id: null };
   }
-  if (!isStaticHtml(children)) return null;
-  const inlinedIds: number[] = [];
-  const inlined = inlineStaticHtml(staticHtml, children, inlinedIds);
-  // Too small to be worth the attribute: any static elements inside stay static themselves.
-  if (JSON.stringify(inlined).length < STATIC_HTML_MIN_JSON) return null;
-  for (const inner of inlinedIds) staticHtml.delete(inner);
-  const { children: _children, ...props } = resolved;
+  if (childrenSize < STATIC_HTML_MIN_JSON) return { size, id: null };
   const id = state.nextId++;
-  staticHtml.set(id, { type, props, children: inlined });
-  return id;
+  staticHtml.set(id, { type, props, children: inlineStaticHtml(staticHtml, children) });
+  return { size, id };
 }
 
-async function resolveProps(
+/**
+ * A resolved value, or a promise of it while something in the subtree is async (an async
+ * component, a promise prop). Synchronous subtrees resolve without a microtask per node.
+ */
+type MaybePromise<T> = T | Promise<T>;
+
+function after<T, R>(value: MaybePromise<T>, next: (value: T) => MaybePromise<R>): MaybePromise<R> {
+  return value instanceof Promise ? value.then(next) : next(value);
+}
+
+/** Runs `run`, passing its synchronous throw or its rejection to `onError`. */
+function recover<T>(
+  run: () => MaybePromise<T>,
+  onError: (error: unknown) => MaybePromise<T>,
+): MaybePromise<T> {
+  let result: MaybePromise<T>;
+  try {
+    result = run();
+  } catch (error) {
+    return onError(error);
+  }
+  return result instanceof Promise ? result.catch(onError) : result;
+}
+
+/** `resolve` over `items`, started together like `Promise.all(items.map(resolve))`. */
+function resolveAll<T>(
+  items: readonly T[],
+  resolve: (item: T) => MaybePromise<TreeValue>,
+): MaybePromise<TreeValue[]> {
+  const values: MaybePromise<TreeValue>[] = [];
+  let pending = false;
+  try {
+    for (const item of items) {
+      const value = resolve(item);
+      if (value instanceof Promise) pending = true;
+      values.push(value);
+    }
+  } catch (error) {
+    // The entries already started settle unobserved: their rejection is not the one reported.
+    for (const value of values) if (value instanceof Promise) value.catch(() => {});
+    throw error;
+  }
+  return pending ? Promise.all(values) : (values as TreeValue[]);
+}
+
+function resolveProps(
   state: ResolveState,
   props: Record<string, unknown>,
   context: ResolveContext,
   host: boolean,
-): Promise<{ [key: string]: TreeValue }> {
-  const entries = await Promise.all(
-    Object.entries(props).map(async ([name, value]): Promise<[string, TreeValue] | null> => {
-      // A client component's undefined prop keeps its key, as in RSC.
-      if (value === undefined && host) return null;
-      if (name === "ref") {
-        if (value === null) return null;
-        throw new UnsupportedNode("receives a ref");
-      }
-      if (host && typeof value === "function") {
-        throw new UnsupportedNode(`passes a function to <${String(name)}>`);
-      }
-      return [name, await resolveValue(state, value, context, new Set())];
-    }),
+): MaybePromise<{ [key: string]: TreeValue }> {
+  const entries = Object.entries(props).filter(([name, value]) => {
+    // A client component's undefined prop keeps its key, as in RSC.
+    if (value === undefined && host) return false;
+    if (name === "ref") {
+      if (value === null) return false;
+      throw new UnsupportedNode("receives a ref");
+    }
+    if (host && typeof value === "function") {
+      throw new UnsupportedNode(`passes a function to <${String(name)}>`);
+    }
+    return true;
+  });
+  return after(
+    resolveAll(entries, ([, value]) => resolveValue(state, value, context, new Set())),
+    (values) => Object.fromEntries(entries.map(([name], index) => [name, values[index]!])),
   );
-  return Object.fromEntries(entries.filter((entry) => entry !== null));
 }
 
-async function resolveValue(
+async function resolveThenable(
+  state: ResolveState,
+  value: PromiseLike<unknown>,
+  context: ResolveContext,
+  seen: Set<object>,
+): Promise<TreeValue> {
+  try {
+    return { $: "P", v: await resolveValue(state, await value, context, seen) };
+  } catch (error) {
+    if (error instanceof UnsupportedInParserSensitiveElement) throw error;
+    throw new UnsupportedNode("passes a promise that does not resolve to a serializable value");
+  }
+}
+
+function resolveValue(
   state: ResolveState,
   value: unknown,
   context: ResolveContext,
   seen: Set<object>,
-): Promise<TreeValue> {
+): MaybePromise<TreeValue> {
   // Values JSON cannot hold (Date, BigInt, undefined, …) travel tagged.
   const leaf = encodeLeaf(value);
   if (leaf) return leaf as TreeValue;
@@ -391,97 +459,127 @@ async function resolveValue(
   if (React.isValidElement(value)) {
     return resolveElement(state, value as React.ReactElement<Record<string, unknown>>, context);
   }
-  if (isThenable(value)) {
-    try {
-      return { $: "P", v: await resolveValue(state, await value, context, seen) };
-    } catch (error) {
-      if (error instanceof UnsupportedInParserSensitiveElement) throw error;
-      throw new UnsupportedNode("passes a promise that does not resolve to a serializable value");
-    }
-  }
+  if (isThenable(value)) return resolveThenable(state, value, context, seen);
   if (seen.has(value)) throw new UnsupportedNode("passes a circular value");
   seen.add(value);
+  let result: MaybePromise<TreeValue>;
   try {
-    if (Array.isArray(value)) {
-      return await Promise.all(value.map((entry) => resolveValue(state, entry, context, seen)));
-    }
-    if (value instanceof Map) {
-      return { $: "M", v: await resolveValue(state, Array.from(value), context, seen) };
-    }
-    if (value instanceof Set) {
-      return { $: "S", v: await resolveValue(state, Array.from(value), context, seen) };
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new UnsupportedNode("passes a class instance");
-    }
-    const entries = await Promise.all(
-      Object.entries(value)
-        // A key whose value is undefined stays, as `{"$":"u"}`.
-        .map(
-          async ([name, entry]): Promise<[string, TreeValue]> => [
-            name,
-            await resolveValue(state, entry, context, seen),
-          ],
-        ),
-    );
-    const object = Object.fromEntries(entries);
-    return Object.prototype.hasOwnProperty.call(object, "$") ? { $: "o", v: object } : object;
-  } finally {
+    result = resolveContainer(state, value, context, seen);
+  } catch (error) {
     seen.delete(value);
+    throw error;
   }
+  if (result instanceof Promise) return result.finally(() => seen.delete(value));
+  seen.delete(value);
+  return result;
 }
 
-async function resolveElement(
+/** An array, Map, Set or plain object, entry by entry. */
+function resolveContainer(
+  state: ResolveState,
+  value: object,
+  context: ResolveContext,
+  seen: Set<object>,
+): MaybePromise<TreeValue> {
+  if (Array.isArray(value)) {
+    return resolveAll(value, (entry) => resolveValue(state, entry, context, seen));
+  }
+  if (value instanceof Map) {
+    return after(resolveValue(state, Array.from(value), context, seen), (v) => ({ $: "M", v }));
+  }
+  if (value instanceof Set) {
+    return after(resolveValue(state, Array.from(value), context, seen), (v) => ({ $: "S", v }));
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new UnsupportedNode("passes a class instance");
+  }
+  // A key whose value is undefined stays, as `{"$":"u"}`.
+  const entries = Object.entries(value);
+  return after(
+    resolveAll(entries, ([, entry]) => resolveValue(state, entry, context, seen)),
+    (values): TreeValue => {
+      const object = Object.fromEntries(entries.map(([name], index) => [name, values[index]!]));
+      return Object.prototype.hasOwnProperty.call(object, "$") ? { $: "o", v: object } : object;
+    },
+  );
+}
+
+function resolveElement(
   state: ResolveState,
   element: React.ReactElement<Record<string, unknown>>,
   context: ResolveContext,
-): Promise<TreeValue> {
+): MaybePromise<TreeValue> {
   const key = element.key === null || element.key === undefined ? null : String(element.key);
+  return recover(
+    () => resolveElementType(state, element, key, context),
+    (error) => {
+      if (error instanceof UnsupportedNode) return serverHtmlNode(state, element, key, context);
+      throw error;
+    },
+  );
+}
+
+function resolveElementType(
+  state: ResolveState,
+  element: React.ReactElement<Record<string, unknown>>,
+  key: string | null,
+  context: ResolveContext,
+): MaybePromise<TreeValue> {
   const withKey = <T extends { [key: string]: TreeValue }>(node: T): T =>
     key === null ? node : { ...node, k: key };
   let type: unknown = element.type;
   const props = element.props ?? {};
 
-  try {
-    if (typeof type === "string") {
-      const parserSensitive = context.parserSensitive || PARSER_SENSITIVE_TAGS.has(type);
-      try {
+  if (typeof type === "string") {
+    const tag = type;
+    const parserSensitive = context.parserSensitive || PARSER_SENSITIVE_TAGS.has(tag);
+    const hostNode = (resolved: { [key: string]: TreeValue }): TreeValue => {
+      const html = context.elementProp
+        ? null
+        : staticHtmlId(state, tag, resolved, !parserSensitive);
+      const node =
+        html?.id == null
+          ? withKey({ $: "h", t: tag, p: resolved })
+          : withKey({ $: "h", t: tag, p: state.staticHtml!.get(html.id)!.props, s: html.id });
+      if (html) staticSizes.set(node, html.size);
+      return node;
+    };
+    return recover(
+      () => {
         const { children, ...rest } = props;
-        const resolved = await resolveProps(state, rest, context, true);
-        if (children !== undefined) {
-          resolved.children = await resolveValue(
-            state,
-            children,
-            { parserSensitive, ...(context.elementProp ? { elementProp: true } : {}) },
-            new Set(),
-          );
-        }
-        if (!parserSensitive && !context.elementProp) {
-          const id = staticHtmlId(state, type, resolved);
-          if (id !== null)
-            return withKey({ $: "h", t: type, p: state.staticHtml!.get(id)!.props, s: id });
-        }
-        return withKey({ $: "h", t: type, p: resolved });
-      } catch (error) {
+        return after(resolveProps(state, rest, context, true), (resolved) => {
+          if (children === undefined) return hostNode(resolved);
+          const childContext: ResolveContext = context.elementProp
+            ? { parserSensitive, elementProp: true }
+            : { parserSensitive };
+          return after(resolveValue(state, children, childContext, new Set()), (value) => {
+            resolved.children = value;
+            return hostNode(resolved);
+          });
+        });
+      },
+      (error) => {
         if (error instanceof UnsupportedInParserSensitiveElement && !context.parserSensitive) {
           return serverHtmlNode(state, element, key, context);
         }
         throw error;
-      }
-    }
+      },
+    );
+  }
 
-    if (type === React.Fragment || type === React.StrictMode) {
-      return withKey({
-        $: "f",
-        c: await resolveValue(state, props.children, context, new Set()),
-      });
-    }
+  if (type === React.Fragment || type === React.StrictMode) {
+    return after(resolveValue(state, props.children, context, new Set()), (c) =>
+      classifyStaticFragment(state, withKey({ $: "f", c })),
+    );
+  }
 
-    if (type === React.Suspense) {
-      const id = state.nextId++;
-      const fallback = await resolveValue(state, props.fallback, context, new Set());
-      const encoded = resolveValue(state, props.children, context, new Set()).catch((error) => {
+  if (type === React.Suspense) {
+    const id = state.nextId++;
+    return after(resolveValue(state, props.fallback, context, new Set()), (fallback) => {
+      const encoded = new Promise<TreeValue>((resolve) =>
+        resolve(resolveValue(state, props.children, context, new Set())),
+      ).catch((error) => {
         if (error instanceof UnsupportedNode) {
           return serverHtmlNode(
             state,
@@ -496,19 +594,17 @@ async function resolveElement(
       encoded.catch(() => {});
       state.chunks.set(id, { encoded });
       return withKey({ $: "p", f: fallback, i: id });
-    }
+    });
+  }
 
-    if (typeof type === "function" && (type as { [OUTLET]?: true })[OUTLET]) {
-      return withKey({ $: "L", n: String(props.name ?? "children") });
-    }
+  if (typeof type === "function" && (type as { [OUTLET]?: true })[OUTLET]) {
+    return withKey({ $: "L", n: String(props.name ?? "children") });
+  }
 
-    const clientReference = getClientReference(type);
-    if (clientReference) {
-      const { children, ...rest } = props;
-      const resolved = await resolveProps(state, rest, { ...context, elementProp: true }, false);
-      if (children !== undefined) {
-        resolved.children = await resolveValue(state, children, context, new Set());
-      }
+  const clientReference = getClientReference(type);
+  if (clientReference) {
+    const { children, ...rest } = props;
+    const clientNode = (resolved: { [key: string]: TreeValue }): TreeValue => {
       if (Object.values(resolved).some(isServerHtmlPart)) state.clonableParts = true;
       state.components.set(
         `${clientReference.src}#${clientReference.exportName}`,
@@ -520,49 +616,58 @@ async function resolveElement(
         e: clientReference.exportName,
         p: resolved,
       });
-    }
-
-    let forwardRef = false;
-    while (type && typeof type === "object") {
-      const typeOf = (type as { $$typeof?: symbol }).$$typeof;
-      if (typeOf === MEMO_TYPE) {
-        type = (type as { type: unknown }).type;
-        if (getClientReference(type)) {
-          return resolveElement(
-            state,
-            React.createElement(type as React.ComponentType<any>, {
-              ...props,
-              key: element.key,
-            }) as React.ReactElement<Record<string, unknown>>,
-            context,
-          );
-        }
-        continue;
-      }
-      if (typeOf === FORWARD_REF_TYPE) {
-        type = (type as { render: unknown }).render;
-        forwardRef = true;
-        break;
-      }
-      throw new UnsupportedNode("is not a function component");
-    }
-
-    if (typeof type !== "function") throw new UnsupportedNode("is not a function component");
-    if ((type as { prototype?: { isReactComponent?: unknown } }).prototype?.isReactComponent) {
-      throw new UnsupportedNode("is a class component");
-    }
-    let rendered = callServerComponent(
-      type as (props: unknown, ref?: unknown) => unknown,
-      props,
-      forwardRef,
+    };
+    return after(
+      resolveProps(state, rest, { ...context, elementProp: true }, false),
+      (resolved) => {
+        if (children === undefined) return clientNode(resolved);
+        return after(resolveValue(state, children, context, new Set()), (value) => {
+          resolved.children = value;
+          return clientNode(resolved);
+        });
+      },
     );
-    if (isThenable(rendered)) rendered = await rendered;
-    const resolved = await resolveValue(state, rendered, context, new Set());
-    return key === null ? resolved : { $: "f", k: key, c: resolved };
-  } catch (error) {
-    if (error instanceof UnsupportedNode) return serverHtmlNode(state, element, key, context);
-    throw error;
   }
+
+  let forwardRef = false;
+  while (type && typeof type === "object") {
+    const typeOf = (type as { $$typeof?: symbol }).$$typeof;
+    if (typeOf === MEMO_TYPE) {
+      type = (type as { type: unknown }).type;
+      if (getClientReference(type)) {
+        return resolveElement(
+          state,
+          React.createElement(type as React.ComponentType<any>, {
+            ...props,
+            key: element.key,
+          }) as React.ReactElement<Record<string, unknown>>,
+          context,
+        );
+      }
+      continue;
+    }
+    if (typeOf === FORWARD_REF_TYPE) {
+      type = (type as { render: unknown }).render;
+      forwardRef = true;
+      break;
+    }
+    throw new UnsupportedNode("is not a function component");
+  }
+
+  if (typeof type !== "function") throw new UnsupportedNode("is not a function component");
+  if ((type as { prototype?: { isReactComponent?: unknown } }).prototype?.isReactComponent) {
+    throw new UnsupportedNode("is a class component");
+  }
+  const rendered = callServerComponent(
+    type as (props: unknown, ref?: unknown) => unknown,
+    props,
+    forwardRef,
+  );
+  return after(isThenable(rendered) ? Promise.resolve(rendered) : rendered, (value) =>
+    after(resolveValue(state, value, context, new Set()), (resolved) =>
+      key === null ? resolved : classifyStaticFragment(state, { $: "f", k: key, c: resolved }),
+    ),
+  );
 }
 
 const chunkComponents = /* @__PURE__ */ new WeakMap<
