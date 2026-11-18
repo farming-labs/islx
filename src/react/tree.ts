@@ -759,6 +759,54 @@ function resolveElementType(
   );
 }
 
+const EMPTY_HTML = { __html: "" };
+
+const clonedHtmlComponents = /* @__PURE__ */ new WeakMap<
+  object,
+  React.ComponentType<{ type: string; props: Record<string, unknown>; source: Element }>
+>();
+
+/**
+ * A static element rebuilt from a parsed document (a navigation's): React renders the element and
+ * its children are a copy of the parsed element's, put in before the browser paints. A copy, not
+ * the nodes themselves, so the element can render again from the same source.
+ */
+function getClonedHtmlComponent() {
+  const existing = clonedHtmlComponents.get(React.createElement);
+  if (existing) return existing;
+  function ClonedHtml({
+    type,
+    props,
+    source,
+  }: {
+    type: string;
+    props: Record<string, unknown>;
+    source: Element;
+  }): React.ReactNode {
+    const ref = React.useRef<Element>(null);
+    const mounted = React.useRef(false);
+    React.useLayoutEffect(() => {
+      const element = ref.current;
+      if (!element) return;
+      const hydrated = !mounted.current && element.firstChild !== null;
+      mounted.current = true;
+      // Hydrating, the element already shows the page's HTML for it.
+      if (hydrated) return;
+      element.replaceChildren(...Array.from(source.cloneNode(true).childNodes));
+    }, [source]);
+    // An empty inner HTML React leaves alone: hydration keeps what the server sent, and the
+    // effect puts in the copy.
+    return React.createElement(type, {
+      ...props,
+      ref,
+      suppressHydrationWarning: true,
+      dangerouslySetInnerHTML: EMPTY_HTML,
+    });
+  }
+  clonedHtmlComponents.set(React.createElement, ClonedHtml);
+  return ClonedHtml;
+}
+
 const chunkComponents = /* @__PURE__ */ new WeakMap<
   object,
   React.ComponentType<{ chunk: ResolvedChunk }>
@@ -1472,12 +1520,16 @@ async function prepareTree(
     readParts(template.content.children);
   }
   // Static elements' HTML, from the page and from the templates of client components that did not
-  // render them.
-  const staticHtml = new Map<number, string>();
+  // render them. From another document (a navigation's), the parsed element itself: the browser
+  // clones its children instead of parsing its HTML again.
+  const detached = (root.ownerDocument ?? root) !== document;
+  const staticHtml = new Map<number, string | Element>();
   const readStatic = (parent: ParentNode) => {
     for (const element of parent.querySelectorAll(`[${STATIC_HTML_ATTRIBUTE}]`)) {
       const id = partId(element.getAttribute(STATIC_HTML_ATTRIBUTE));
-      if (id !== null && !staticHtml.has(id)) staticHtml.set(id, element.innerHTML);
+      if (id !== null && !staticHtml.has(id)) {
+        staticHtml.set(id, detached ? element : element.innerHTML);
+      }
     }
   };
   readStatic(root);
@@ -1547,9 +1599,17 @@ async function prepareTree(
       staticHtml(id, type, props) {
         const html = staticHtml.get(id);
         if (html === undefined) throw new Error(`static HTML ${id} was not found`);
+        const name = scopedName(scope, id);
+        if (typeof html !== "string") {
+          return React.createElement(getClonedHtmlComponent(), {
+            type,
+            props: { ...props, [STATIC_HTML_ATTRIBUTE]: name },
+            source: html,
+          });
+        }
         return React.createElement(type, {
           ...props,
-          [STATIC_HTML_ATTRIBUTE]: scopedName(scope, id),
+          [STATIC_HTML_ATTRIBUTE]: name,
           suppressHydrationWarning: true,
           dangerouslySetInnerHTML: { __html: html },
         });

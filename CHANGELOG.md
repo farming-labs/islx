@@ -12,6 +12,8 @@
   elements are static HTML in one pass instead of re-walking each subtree. Children made only of
   host elements and text are not resolved at all: the server renders them as they came. On that
   post, the server renders about twice as many requests per second.
+- A server tree rebuilt from a navigation's HTML copies its static elements from the parsed
+  document instead of setting their HTML again, so the browser parses that markup once.
 
 ## 0.0.24
 

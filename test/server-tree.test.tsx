@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React, { act, createContext, use, useContext, useId, useState, type ReactNode } from "react";
-import { hydrateRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getValueStore } from "@farm.js/islx/client";
@@ -1239,6 +1239,57 @@ describe("static HTML in server trees", () => {
     expect(warnings.filter((warning) => /hydrat|did not match/i.test(warning))).toEqual([]);
     expect(container.querySelector("#plain")!.innerHTML).toBe(plain);
     expect(container.querySelector("#composed p")!.textContent).toBe(PROSE);
+  });
+
+  it("copies static elements from a navigation's parsed HTML instead of parsing them again", async () => {
+    async function Page() {
+      return (
+        <>
+          <article id="post">
+            <p>{PROSE}</p>
+          </article>
+          <Disclosure icon="icon">
+            <section id="later">
+              <p>{PROSE}</p>
+            </section>
+          </Disclosure>
+        </>
+      );
+    }
+    const source = document.createElement("template");
+    source.innerHTML = await renderPage(<Page />);
+    const { ServerHtml } = createClientRuntime();
+    const page = await createServerTreeElement(source.content.querySelector("#page-root")!, {
+      load,
+      ServerHtml,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const parsed: string[] = [];
+    const innerHTML = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML")!;
+    vi.spyOn(Element.prototype, "innerHTML", "set").mockImplementation(function (
+      this: Element,
+      html: string,
+    ) {
+      parsed.push(html);
+      innerHTML.set!.call(this, html);
+    });
+    const root = createRoot(container);
+    mountedRoots.push(root);
+    await act(async () => root.render(routeTree(page)));
+    expect(container.querySelector("#post p")!.textContent).toBe(PROSE);
+    // An element a client component renders later comes from its template's parsed copy.
+    expect(container.querySelector("#later")).toBeNull();
+    await click(container, ".disclosure");
+    expect(container.querySelector("#later p")!.textContent).toBe(PROSE);
+    // Neither static element's children went through the HTML parser again.
+    expect(parsed).not.toContain(`<p>${PROSE}</p>`);
+    // Rendered again from the same source after it unmounts, the element gets its HTML again.
+    await act(async () => root.render(routeTree(null)));
+    expect(container.querySelector("#post")).toBeNull();
+    await act(async () => root.render(routeTree(page)));
+    expect(container.querySelector("#post p")!.textContent).toBe(PROSE);
+    expect(source.content.querySelector("#post p")!.textContent).toBe(PROSE);
   });
 
   it("names a layout's static elements after its scope, apart from the page's", async () => {
