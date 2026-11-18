@@ -38,6 +38,48 @@ const SERVER_HTML_TAG = HTML_ELEMENT;
  */
 export const PAYLOAD_ONLY_ATTRIBUTE = "partial";
 const SERVER_HTML_ATTRIBUTE = "name";
+/**
+ * On a host element inside a server tree whose children are plain HTML: the payload leaves its
+ * children out, and the browser renders the element with the HTML it already shows (or the HTML a
+ * client component's template keeps). The value names it like an `<f-html>` part.
+ */
+const STATIC_HTML_ATTRIBUTE = HTML_ELEMENT;
+/**
+ * Children whose JSON is shorter than this stay in the payload: the attribute that names a static
+ * element costs about as much.
+ */
+const STATIC_HTML_MIN_JSON = 64;
+// Elements whose subtree never becomes static HTML: their state lives in the DOM or React reads
+// their content (forms and their fields, media), the parser treats them specially, or they load
+// something when created.
+const DYNAMIC_HTML_TAGS = /* @__PURE__ */ new Set([
+  "audio",
+  "button",
+  "canvas",
+  "details",
+  "dialog",
+  "embed",
+  "form",
+  "iframe",
+  "img",
+  "input",
+  "link",
+  "math",
+  "meta",
+  "noscript",
+  "object",
+  "option",
+  "picture",
+  "script",
+  "select",
+  "source",
+  "style",
+  "svg",
+  "template",
+  "textarea",
+  "title",
+  "video",
+]);
 const OUTLET = Symbol.for("islx.react.outlet");
 
 /**
@@ -105,6 +147,11 @@ interface TreeResolver {
   outlet(name: string): React.ReactNode;
   /** The function a server action reference stands for. */
   action(id: string, sealed: string | undefined): unknown;
+  /**
+   * A host element whose children are static HTML (`s` on an `h` node): the server renders them,
+   * and the browser renders the element with the HTML the page shows for it.
+   */
+  staticHtml?(id: number, type: string, props: Record<string, unknown>): React.ReactElement;
 }
 
 type ReactInternals = { H?: unknown; ReactCurrentDispatcher?: { current: unknown } };
@@ -170,8 +217,17 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
+/** A host element whose children are static HTML: its tag, its other props and its children. */
+interface StaticHtml {
+  type: string;
+  props: { [key: string]: TreeValue };
+  children: TreeValue;
+}
+
 interface ResolveContext {
   parserSensitive: boolean;
+  /** Inside a client component's prop other than `children`, which it may read rather than render. */
+  elementProp?: true;
 }
 
 interface ResolveState {
@@ -181,6 +237,11 @@ interface ResolveState {
   chunks: Map<number, { encoded: Promise<TreeValue>; chunk?: ResolvedChunk }>;
   /** Server actions the tree passes, by id: the server renders them as themselves. */
   actions: Map<string, unknown>;
+  /**
+   * The children of host elements whose children are static HTML, by id, when this tree leaves
+   * them out of its payload: a render whose HTML reaches the browser (not a `partial` navigation).
+   */
+  staticHtml?: Map<number, StaticHtml>;
   /**
    * Whether a client component receives a server HTML part as a prop, which it may clone with
    * props of its own (`asChild`, `render`): only rendering that component shows the part then.
@@ -202,6 +263,83 @@ function serverHtmlNode(
   const id = state.nextId++;
   state.serverHtml.set(id, node);
   return key === null ? { $: "x", i: id } : { $: "x", i: id, k: String(key) };
+}
+
+/** Whether a resolved value is plain HTML: host elements, fragments and text, nothing to rebuild. */
+function isStaticHtml(value: TreeValue): boolean {
+  if (value === null || typeof value !== "object") return true;
+  if (Array.isArray(value)) return value.every(isStaticHtml);
+  if (value.$ === "f") return isStaticHtml(value.c as TreeValue);
+  if (value.$ !== "h" || DYNAMIC_HTML_TAGS.has(value.t as string)) return false;
+  for (const [name, prop] of Object.entries(value.p as { [key: string]: TreeValue })) {
+    if (name === "children" ? !isStaticHtml(prop) : !isPlainData(prop)) return false;
+  }
+  return true;
+}
+
+/** Data an attribute renders from as it is (a `style` object, a string): nothing tagged. */
+function isPlainData(value: TreeValue): boolean {
+  if (value === null || typeof value !== "object") return true;
+  if (Array.isArray(value)) return value.every(isPlainData);
+  return !("$" in value) && Object.values(value).every(isPlainData);
+}
+
+/**
+ * `value` with the children of the static elements inside it put back, so only the outermost
+ * element is static; their ids go to `inlined`.
+ */
+function inlineStaticHtml(
+  staticHtml: Map<number, StaticHtml>,
+  value: TreeValue,
+  inlined: number[],
+): TreeValue {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value))
+    return value.map((entry) => inlineStaticHtml(staticHtml, entry, inlined));
+  if (value.$ === "f") {
+    return { ...value, c: inlineStaticHtml(staticHtml, value.c as TreeValue, inlined) };
+  }
+  const props = value.p as { [key: string]: TreeValue };
+  if (typeof value.s === "number") {
+    const { s: id, ...element } = value;
+    inlined.push(id);
+    const children = inlineStaticHtml(staticHtml, staticHtml.get(id)!.children, inlined);
+    return { ...element, p: { ...props, children } };
+  }
+  if (props.children === undefined) return value;
+  return {
+    ...value,
+    p: { ...props, children: inlineStaticHtml(staticHtml, props.children, inlined) },
+  };
+}
+
+/**
+ * The id under which a host element's children stay out of the payload, or null when they stay
+ * in: they hold anything to rebuild, React manages the element's content, or they are too small
+ * to be worth the attribute that names them.
+ */
+function staticHtmlId(
+  state: ResolveState,
+  type: string,
+  resolved: { [key: string]: TreeValue },
+): number | null {
+  const staticHtml = state.staticHtml;
+  const children = resolved.children;
+  if (!staticHtml || children === undefined || DYNAMIC_HTML_TAGS.has(type)) return null;
+  if ("dangerouslySetInnerHTML" in resolved) return null;
+  for (const [name, prop] of Object.entries(resolved)) {
+    if (name !== "children" && !isPlainData(prop)) return null;
+  }
+  if (!isStaticHtml(children)) return null;
+  const inlinedIds: number[] = [];
+  const inlined = inlineStaticHtml(staticHtml, children, inlinedIds);
+  // Too small to be worth the attribute: any static elements inside stay static themselves.
+  if (JSON.stringify(inlined).length < STATIC_HTML_MIN_JSON) return null;
+  for (const inner of inlinedIds) staticHtml.delete(inner);
+  const { children: _children, ...props } = resolved;
+  const id = state.nextId++;
+  staticHtml.set(id, { type, props, children: inlined });
+  return id;
 }
 
 async function resolveProps(
@@ -312,7 +450,17 @@ async function resolveElement(
         const { children, ...rest } = props;
         const resolved = await resolveProps(state, rest, context, true);
         if (children !== undefined) {
-          resolved.children = await resolveValue(state, children, { parserSensitive }, new Set());
+          resolved.children = await resolveValue(
+            state,
+            children,
+            { parserSensitive, ...(context.elementProp ? { elementProp: true } : {}) },
+            new Set(),
+          );
+        }
+        if (!parserSensitive && !context.elementProp) {
+          const id = staticHtmlId(state, type, resolved);
+          if (id !== null)
+            return withKey({ $: "h", t: type, p: state.staticHtml!.get(id)!.props, s: id });
         }
         return withKey({ $: "h", t: type, p: resolved });
       } catch (error) {
@@ -357,7 +505,7 @@ async function resolveElement(
     const clientReference = getClientReference(type);
     if (clientReference) {
       const { children, ...rest } = props;
-      const resolved = await resolveProps(state, rest, context, false);
+      const resolved = await resolveProps(state, rest, { ...context, elementProp: true }, false);
       if (children !== undefined) {
         resolved.children = await resolveValue(state, children, context, new Set());
       }
@@ -468,7 +616,7 @@ function createTreeProps(
   return { props: created, children: createTreeChildren(children, resolver, inClient) };
 }
 
-/** The server HTML parts in `value`, in tree order. */
+/** The server HTML parts and static elements in `value`, in tree order. */
 function collectServerHtml(value: TreeValue, ids: number[]): number[] {
   if (value === null || typeof value !== "object") return ids;
   if (Array.isArray(value)) {
@@ -479,6 +627,7 @@ function collectServerHtml(value: TreeValue, ids: number[]): number[] {
     ids.push(value.i as number);
     return ids;
   }
+  if (value.$ === "h" && typeof value.s === "number") ids.push(value.s);
   const object = value.$ === "o" ? (value.v as { [key: string]: TreeValue }) : value;
   for (const entry of Object.values(object)) collectServerHtml(entry, ids);
   return ids;
@@ -499,6 +648,11 @@ function createTreeValue(value: TreeValue, resolver: TreeResolver, inClient = fa
         value.k,
         inClient,
       );
+      if (typeof value.s === "number") {
+        if (!resolver.staticHtml)
+          throw new Error("islx: static HTML outside a page or layout tree");
+        return resolver.staticHtml(value.s, value.t as string, props);
+      }
       return React.createElement(value.t as string, props, ...children);
     }
     case "c": {
@@ -664,9 +818,26 @@ async function createPayloadOnlyPage(
     pending = [...state.chunks.keys()].filter((id) => !chunks.has(id));
   }
   if (state.clonableParts) return null;
+  // Static elements arrive as HTML, which is smaller than their tree, in a template the browser
+  // reads them from.
+  const staticHtml = state.staticHtml;
+  const staticElements =
+    staticHtml && staticHtml.size > 0
+      ? React.createElement(
+          HTML_TEMPLATE_ELEMENT,
+          { key: "static", [STATIC_HTML_ATTRIBUTE]: "" },
+          Array.from(staticHtml, ([id, element]) =>
+            resolver.staticHtml!(id, element.type, {
+              ...createTreeProps(element.props, resolver, undefined, false).props,
+              key: `s${id}`,
+            }),
+          ),
+        )
+      : null;
   return React.createElement(
     React.Fragment,
     null,
+    staticElements,
     ...Array.from(state.serverHtml.keys(), (id) => resolver.serverHtml(id, `h${id}`)),
     React.createElement(
       React.Fragment,
@@ -753,13 +924,41 @@ function createServerHtmlParts(
   state: ResolveState,
   scope: string | undefined,
   isolate: (element: React.ReactNode) => React.ReactNode,
-): Pick<TreeResolver, "serverHtml" | "unrendered"> {
+  resolver: () => TreeResolver,
+): Pick<TreeResolver, "serverHtml" | "unrendered" | "staticHtml"> {
   const rendered = new Set<number>();
+  // A static element renders its children with a marker before them, so the template after its
+  // client component knows whether it rendered.
+  const staticElement = (
+    id: number,
+    type: string,
+    props: Record<string, unknown>,
+  ): React.ReactElement =>
+    React.createElement(
+      type,
+      { ...props, [STATIC_HTML_ATTRIBUTE]: scopedName(scope, id) },
+      React.createElement(RenderedStaticHtml, { id, rendered }),
+      ...createTreeChildren(state.staticHtml!.get(id)!.children, resolver(), false),
+    );
   const part = (
     id: number,
     key: string | null,
     props?: Record<string, unknown>,
   ): React.ReactElement => {
+    const unrenderedStatic = state.staticHtml?.get(id);
+    if (unrenderedStatic) {
+      const attributes = createTreeProps(
+        unrenderedStatic.props,
+        resolver(),
+        undefined,
+        false,
+      ).props;
+      return staticElement(
+        id,
+        unrenderedStatic.type,
+        key === null ? attributes : { ...attributes, key },
+      );
+    }
     const node = state.serverHtml.get(id) as React.ReactNode;
     return React.createElement(
       SERVER_HTML_TAG,
@@ -795,7 +994,13 @@ function createServerHtmlParts(
       });
     },
     unrendered: (ids) => React.createElement(UnrenderedServerHtml, { ids, rendered, scope, part }),
+    staticHtml: state.staticHtml ? staticElement : undefined,
   };
+}
+
+function RenderedStaticHtml({ id, rendered }: { id: number; rendered: Set<number> }): null {
+  rendered.add(id);
+  return null;
 }
 
 function hasChildrenOutlet(value: TreeValue): boolean {
@@ -835,6 +1040,7 @@ export async function renderServerTree(
     serverHtml: new Map(),
     chunks: new Map(),
     actions: new Map(),
+    staticHtml: new Map(),
   };
   const scope = options.scope;
   const tree = await resolveValue(state, element, { parserSensitive: false }, new Set());
@@ -888,7 +1094,7 @@ export async function renderServerTree(
       entry.chunk = chunk;
       return chunk;
     },
-    ...createServerHtmlParts(state, scope, isolate),
+    ...createServerHtmlParts(state, scope, isolate, () => resolver),
     outlet(name) {
       return outletContent(options.outlets, name, layoutScript);
     },
@@ -1065,6 +1271,27 @@ async function prepareTree(
     templates.set(id, template.innerHTML);
     readParts(template.content.children);
   }
+  // Static elements' HTML, from the page and from the templates of client components that did not
+  // render them.
+  const staticHtml = new Map<number, string>();
+  const readStatic = (parent: ParentNode) => {
+    for (const element of parent.querySelectorAll(`[${STATIC_HTML_ATTRIBUTE}]`)) {
+      const id = partId(element.getAttribute(STATIC_HTML_ATTRIBUTE));
+      if (id !== null && !staticHtml.has(id)) staticHtml.set(id, element.innerHTML);
+    }
+  };
+  readStatic(root);
+  for (const template of root.querySelectorAll<HTMLTemplateElement>(
+    `${HTML_TEMPLATE_ELEMENT}[${SERVER_HTML_ATTRIBUTE}]`,
+  )) {
+    if (partId(template.getAttribute(SERVER_HTML_ATTRIBUTE)) !== null) readStatic(template.content);
+  }
+  // A `partial` navigation sends its static elements in a template of their own.
+  for (const template of root.querySelectorAll<HTMLTemplateElement>(
+    `${HTML_TEMPLATE_ELEMENT}[${STATIC_HTML_ATTRIBUTE}]`,
+  )) {
+    readStatic(template.content);
+  }
 
   const resolver = (
     outlets?: Record<string, React.ReactNode>,
@@ -1116,6 +1343,16 @@ async function prepareTree(
       },
       action(id, sealed) {
         return createServerReference(id, sealed);
+      },
+      staticHtml(id, type, props) {
+        const html = staticHtml.get(id);
+        if (html === undefined) throw new Error(`static HTML ${id} was not found`);
+        return React.createElement(type, {
+          ...props,
+          [STATIC_HTML_ATTRIBUTE]: scopedName(scope, id),
+          suppressHydrationWarning: true,
+          dangerouslySetInnerHTML: { __html: html },
+        });
       },
     };
     return treeResolver;
@@ -1370,7 +1607,7 @@ export async function renderSlotTree(
       entry.chunk = chunk;
       return chunk;
     },
-    ...createServerHtmlParts(state, scope, isolateIslands),
+    ...createServerHtmlParts(state, scope, isolateIslands, () => resolver),
     outlet() {
       return null;
     },
