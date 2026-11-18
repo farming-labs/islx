@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A server tree sends static markup once. A host element whose children are plain HTML (no client
+  components, Suspense boundaries, actions, form fields or media) leaves its children out of the
+  payload and carries `f-html="<name>"`; the browser renders it with the HTML the page already
+  shows. A `partial` navigation sends those elements as HTML in a `<template f-html>`. On a
+  blog-length post under a client provider, the document goes from 20.8 to 9.4 KB brotli and a
+  navigation from 14.8 to 9.4 KB.
+
 ## 0.0.24
 
 - A client component in a server tree that clones server HTML it receives, as Base UI's `render`

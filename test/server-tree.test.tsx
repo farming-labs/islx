@@ -711,6 +711,14 @@ describe("server tree pages", () => {
       const page = (container: Element) =>
         container.querySelector("#page-root")!.innerHTML.replace(/data-uid="[^"]+"/g, "");
       expect(page(fromPayload)).toBe(page(fromFull));
+      // A static element's children travel once, as HTML: in the page, or in a template of a
+      // `partial` navigation's own.
+      expect(full).toContain('<ul f-html="0"><li>a</li><li>b</li></ul>');
+      expect(payloadOnly).toContain('<template f-html=""><ul f-html="0"><li>a</li><li>b</li></ul>');
+      for (const html of [full, payloadOnly]) {
+        expect(html).toContain('{"$":"h","t":"ul","p":{},"s":0}');
+        expect(html).not.toContain('{"children":"a"}');
+      }
       // Client components still read the layout's context.
       await click(fromPayload, "#header");
       expect(fromPayload.querySelector("#page")!.textContent).toBe("page:open");
@@ -1025,5 +1033,181 @@ describe("server tree layouts", () => {
     container.innerHTML = await renderRoute();
     const { ServerHtml } = createClientRuntime();
     expect(await createServerTreeLayout(container, "/docs", { load, ServerHtml })).toBeNull();
+  });
+});
+
+describe("static HTML in server trees", () => {
+  afterEach(() => {
+    for (const root of mountedRoots.splice(0)) act(() => root.unmount());
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  const PROSE = "Static prose the payload never repeats, ".repeat(4).trim();
+  const payloadOf = (html: string, name = "") =>
+    html.match(
+      new RegExp(`<script type="f/tree"${name ? ` name="${name}"` : ""}>([^<]*)</script>`),
+    )![1]!;
+
+  it("sends an element's static children once, as HTML, and hydrates the element from it", async () => {
+    async function Page() {
+      return (
+        <>
+          <article>
+            <h2>Guide</h2>
+            <p>{PROSE}</p>
+            <ul>
+              <li>one</li>
+              <li>two</li>
+            </ul>
+          </article>
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    expect(html.split(PROSE)).toHaveLength(2);
+    // The outermost static element only: its children carry no names of their own.
+    const id = payloadOf(html).match(/\{"\$":"h","t":"article","p":\{\},"s":(\d+)\}/)![1];
+    expect(html).toContain(`<article f-html="${id}"><h2>Guide</h2><p>${PROSE}</p><ul><li>`);
+    expect(html.match(/f-html=/g)).toHaveLength(1);
+
+    const consoleError = vi.spyOn(console, "error");
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    // React warns when hydration finds HTML other than what it renders.
+    const warnings = consoleError.mock.calls.map((call) => String(call[0]));
+    expect(warnings.filter((warning) => /hydrat|did not match/i.test(warning))).toEqual([]);
+    const article = container.querySelector("article")!;
+    expect(article.querySelector("p")!.textContent).toBe(PROSE);
+    // The page around it still works: its client components read the layout's context.
+    await click(container, "#header");
+    expect(container.querySelector("#page")!.textContent).toBe("tree:open");
+    expect(container.querySelector("article")).toBe(article);
+  });
+
+  it("keeps static children a client component renders only later in its template", async () => {
+    async function Page() {
+      return (
+        <Disclosure icon="icon">
+          <section id="later">
+            <p>{PROSE}</p>
+          </section>
+        </Disclosure>
+      );
+    }
+    const html = await renderPage(<Page />);
+    expect(payloadOf(html)).not.toContain(PROSE);
+    expect(html).toMatch(/<template name="\d+"><section id="later" f-html="\d+">/);
+
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    expect(container.querySelector("#later")).toBeNull();
+    await click(container, ".disclosure");
+    expect(container.querySelector("#later p")!.textContent).toBe(PROSE);
+  });
+
+  it("keeps in the payload what the browser renders itself or a client component reads", async () => {
+    async function Page() {
+      return (
+        <>
+          <form>
+            <label>{PROSE}</label>
+            <input name="q" defaultValue="query" />
+          </form>
+          <Disclosure icon={<b>{PROSE}</b>} defaultOpen />
+          <p>small</p>
+        </>
+      );
+    }
+    const html = await renderPage(<Page />);
+    const payload = payloadOf(html);
+    // A form's fields keep their state in the DOM, so the form is not static; its label is.
+    expect(payload).toContain('"t":"form"');
+    expect(payload).toContain('"t":"input"');
+    expect(html).toContain(`<label f-html=`);
+    // A client component's other props are data it may read.
+    expect(payload).toContain(`{"$":"h","t":"b","p":{"children":"${PROSE}"}}`);
+    // Too small to be worth naming.
+    expect(payload).toContain('{"$":"h","t":"p","p":{"children":"small"}}');
+
+    const { container, errors } = await hydratePage(html);
+    expect(errors).toEqual([]);
+    expect(container.querySelector("input")!.value).toBe("query");
+  });
+
+  it("refuses a tree whose static HTML is missing from the page", async () => {
+    async function Page() {
+      return <p>{PROSE}</p>;
+    }
+    const html = (await renderPage(<Page />)).replace(/ f-html="0"/, "");
+    const source = Object.assign(document.createElement("div"), { innerHTML: html });
+    await expect(
+      createServerTreeElement(source.querySelector("#page-root")!, {
+        load,
+        ServerHtml: createClientRuntime().ServerHtml,
+      }),
+    ).rejects.toThrow("static HTML 0 was not found");
+  });
+
+  it("names a layout's static elements after its scope, apart from the page's", async () => {
+    function StaticLayout({ children }: { children: ReactNode }) {
+      return (
+        <PanelProviderIsland>
+          <header>
+            <HeaderButtonIsland />
+            <p id="layout-note">{PROSE}</p>
+          </header>
+          {children}
+        </PanelProviderIsland>
+      );
+    }
+    const page = await renderServerTree(
+      <>
+        <p id="page-note">{`${PROSE} (page)`}</p>
+        <PageButton label="page" />
+      </>,
+      {},
+    );
+    const layout = await renderServerTree(
+      <StaticLayout>
+        <Outlet />
+      </StaticLayout>,
+      { outlets: { children: <div id="page-root">{page}</div> }, scope: "/" },
+    );
+    const stream = await renderToReadableStream(withinClientRoot(layout));
+    await stream.allReady;
+    const html = await new Response(stream).text();
+    expect(html).toMatch(/<p id="layout-note" f-html="\/:\d+">/);
+    expect(html).toMatch(/<p id="page-note" f-html="\d+">/);
+    expect(payloadOf(html, "/")).not.toContain(PROSE);
+    expect(payloadOf(html)).not.toContain(PROSE);
+
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    document.body.append(container);
+    const { ServerHtml } = createClientRuntime();
+    const rebuiltLayout = await createServerTreeLayout(container, "/", { load, ServerHtml });
+    const rebuiltPage = await createServerTreeElement(container.querySelector("#page-root")!, {
+      load,
+      ServerHtml,
+    });
+    const errors: unknown[] = [];
+    let root!: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(
+        container,
+        withinClientRoot(
+          rebuiltLayout!.render({ children: <div id="page-root">{rebuiltPage}</div> }),
+        ),
+        { onRecoverableError: (error) => errors.push(error) },
+      );
+    });
+    mountedRoots.push(root);
+    expect(errors).toEqual([]);
+    expect(container.querySelector("#layout-note")!.textContent).toBe(PROSE);
+    expect(container.querySelector("#page-note")!.textContent).toBe(`${PROSE} (page)`);
+    await click(container, "#header");
+    expect(container.querySelector("#page")!.textContent).toBe("page:open");
   });
 });
