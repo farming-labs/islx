@@ -833,5 +833,8 @@ export function createIsland<P extends object>(
   }
   Island.displayName = `Island(${Component.displayName || Component.name || exportName})`;
   Object.defineProperty(Island, CLIENT_REFERENCE, { value: { src, exportName, Component } });
+  // React's own marker, which code written for Server Components checks before it calls a
+  // component outside a render. React renders a function component whatever its `$$typeof`.
+  Object.defineProperty(Island, "$$typeof", { value: Symbol.for("react.client.reference") });
   return Island as React.ComponentType<P>;
 }
