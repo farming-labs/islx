@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- An island carries React's client reference marker (`$$typeof` is
+  `Symbol.for("react.client.reference")`), as a `"use client"` export does under React Server
+  Components. Code written for Server Components that walks an element tree outside a render, such
+  as an MDX-to-Markdown converter, skips it instead of calling it and failing on its hooks.
+
 ## 0.0.25
 
 - A server tree sends static markup once. A host element whose children are plain HTML (no client

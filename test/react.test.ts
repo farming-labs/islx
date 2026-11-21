@@ -411,6 +411,16 @@ describe("islands", () => {
     }
   });
 
+  it("carry React's client reference marker, so code written for Server Components skips them", async () => {
+    // How such code (an MDX-to-Markdown walker, say) tells a client component it must not call.
+    const isClientReference = (type: unknown) =>
+      (type as { $$typeof?: symbol }).$$typeof === Symbol.for("react.client.reference");
+    expect(isClientReference(CounterIsland)).toBe(true);
+    expect(isClientReference(Counter)).toBe(false);
+    const markup = await html(h(CounterIsland, { start: 1, label: "b" }));
+    expect(markup).toContain('<f-island src="/src/counter.tsx" export="Counter"');
+  });
+
   it("render a client component inside an island as part of it, not as another island", async () => {
     const markup = await html(h(OuterIsland));
     expect(markup.match(/<f-island/g)?.length).toBe(1);
