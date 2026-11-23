@@ -64,6 +64,7 @@ setIslandServerHook({
     const named = context?.named;
     const addressed = addressValues(props, {
       ancestors,
+      memo: context?.addressed,
       encodeSpecial: (value, above) => {
         if (value && typeof value === "object" && runtimeTagged.has(value)) return value;
         if (isTemporaryReference(value)) {

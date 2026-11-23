@@ -363,6 +363,23 @@ describe("islands", () => {
     expect(again).not.toContain('type="f/value"');
   });
 
+  it("encode a value several islands receive once per response", async () => {
+    const tree = Array.from({ length: 40 }, (_, index) => ({
+      title: `Page ${index} about rendering`,
+      href: `/docs/${index}`,
+    }));
+    // The encoder stringifies every string it meets, so the first title shows each encode.
+    const stringify = vi.spyOn(JSON, "stringify");
+    const encodes = () => stringify.mock.calls.filter(([value]) => value === tree[0]!.title).length;
+    const page = h("div", null, h(ShowsTree, { tree }), h(ShowsTreeIsland, { tree }));
+    const markup = await html(page);
+    expect(encodes()).toBe(1);
+    expect(markup.match(/type="f\/value"/g)?.length).toBe(1);
+    // A response never reuses another's: the app may have changed the value in between.
+    await html(page);
+    expect(encodes()).toBe(2);
+  });
+
   it("share one decoded value between the islands that received it", async () => {
     const tree = Array.from({ length: 40 }, (_, index) => ({
       title: `Page ${index} about rendering`,

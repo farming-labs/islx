@@ -45,6 +45,24 @@ export interface AddressedProps {
   roots: string[];
 }
 
+/**
+ * @internal What `addressValues` made of the objects whose encoding depends only on what they hold
+ * (no value `encodeSpecial` encodes, no cycle) and whose JSON reaches `minLength`, by object: one
+ * passed to several islands of a response is encoded once, as React Server Components send an
+ * object once per response. Share one only between calls with the same options, and only within a
+ * response.
+ */
+export type AddressMemo = Map<object, AddressMemoEntry>;
+
+interface AddressMemoEntry {
+  json: string;
+  length: number;
+  /** The keys the object's JSON refers to directly. */
+  keys: string[];
+  /** The values of the call that encoded it, which hold those keys and their children. */
+  values: Map<string, AddressedValue>;
+}
+
 export interface AddressOptions {
   /** Values whose JSON is shorter stay inline. */
   minLength?: number;
@@ -63,6 +81,8 @@ export interface AddressOptions {
    * no object is wrapped, values are only addressed.
    */
   encoded?: boolean;
+  /** @internal */
+  memo?: AddressMemo;
 }
 
 /**
@@ -73,9 +93,24 @@ export interface AddressOptions {
  */
 export function addressValues(
   props: Record<string, unknown>,
-  { minLength = VALUE_MIN_LENGTH, encodeSpecial, ancestors, encoded = false }: AddressOptions = {},
+  {
+    minLength = VALUE_MIN_LENGTH,
+    encodeSpecial,
+    ancestors,
+    encoded = false,
+    memo,
+  }: AddressOptions = {},
 ): AddressedProps {
   const values = new Map<string, AddressedValue>();
+  // Counts the values whose JSON depends on where they are (a special value, a cycle): an object
+  // whose encoding did not move it can be remembered.
+  let placed = 0;
+  const copyValue = (key: string, from: Map<string, AddressedValue>) => {
+    if (values.has(key)) return;
+    const value = from.get(key)!;
+    values.set(key, value);
+    for (const child of value.children) copyValue(child, from);
+  };
   const reference = (json: string, children: string[], parent: string[]) => {
     const key = hashValue(json);
     if (!values.has(key)) values.set(key, { key, json, children });
@@ -95,6 +130,7 @@ export function addressValues(
   const encode = (value: unknown, parent: string[], inner = 0): [json: string, length: number] => {
     const special = encoded ? undefined : encodeSpecial?.(value, above);
     if (special !== undefined) {
+      placed++;
       const json = JSON.stringify(special);
       return [json, json.length];
     }
@@ -120,9 +156,33 @@ export function addressValues(
     }
     const depth = inner > 0 ? undefined : depths.get(value);
     if (depth !== undefined) {
+      placed++;
       const json = `{"$":"${CYCLE_TAG}","v":${depths.size - depth}}`;
       return [json, json.length];
     }
+    if (inner === 0 && memo) {
+      const known = memo.get(value);
+      if (known) {
+        for (const key of known.keys) copyValue(key, known.values);
+        parent.push(...known.keys);
+        return [known.json, known.length];
+      }
+      const start = parent.length;
+      const before = placed;
+      const result = encodeObject(value, parent, inner);
+      if (placed === before && result[1] >= minLength) {
+        const keys = parent.slice(start);
+        memo.set(value, { json: result[0], length: result[1], keys, values });
+      }
+      return result;
+    }
+    return encodeObject(value, parent, inner);
+  };
+  const encodeObject = (
+    value: object,
+    parent: string[],
+    inner: number,
+  ): [json: string, length: number] => {
     if (inner === 0) depths.set(value, depths.size);
     try {
       if (!encoded && (value instanceof Map || value instanceof Set)) {

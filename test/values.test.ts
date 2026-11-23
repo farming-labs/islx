@@ -117,6 +117,31 @@ describe("values sent once", () => {
     expect(value).toEqual({ lookalike, big: { $: "D", text: "x".repeat(600) } });
   });
 
+  it("remembers the values whose JSON depends only on what they hold", () => {
+    const memo = new Map();
+    const action = async () => {};
+    const form = { onSave: action, note: "x".repeat(600) };
+    const node: Record<string, unknown> = { name: "x".repeat(600) };
+    node.self = node;
+    const small = { label: "Docs" };
+    const encodeSpecial = (value: unknown) => (value === action ? { $: "a", v: "abc" } : undefined);
+    const props = { tree, form, node, small };
+    addressValues(props, { memo, encodeSpecial });
+    expect(memo.has(tree)).toBe(true);
+    expect(memo.has(tree[0])).toBe(true);
+    // An action's reference, a cycle and a value too small to address are encoded each time.
+    expect(memo.has(form)).toBe(false);
+    expect(memo.has(node)).toBe(false);
+    expect(memo.has(small)).toBe(false);
+    const again = addressValues({ ...props, label: "Menu" }, { memo, encodeSpecial });
+    const fresh = addressValues({ ...props, label: "Menu" }, { encodeSpecial });
+    expect(again).toEqual(fresh);
+    // A call that finds the whole tree remembered still holds every value inside it.
+    const hit = addressValues({ tree }, { memo });
+    expect(hit.values.size).toBe(addressValues({ tree }).values.size);
+    expect(read(render(hit)).value).toEqual({ tree });
+  });
+
   it("encodes actions and slots through the adapter's hook", () => {
     const action = async () => {};
     const addressed = addressValues(

@@ -13,6 +13,7 @@ import * as ReactDOM from "react-dom";
 import type { IslandStrategy } from "../client/schedule";
 import { SERVER_ERROR_MESSAGE, readIterator, setIteratorEntries } from "../protocol/codec";
 import { getBuildDefaults } from "../server/build";
+import type { AddressMemo } from "../server/values";
 import {
   fromStreamSteps,
   getStreamKind,
@@ -46,6 +47,17 @@ export interface IslandEncodeContext {
   named: Map<object, Record<string, unknown>>;
   /** A stream step's next step, by promise: it continues the stream's ancestors, not the step's. */
   nextSteps: WeakMap<object, readonly object[]>;
+  /** The response's encoded objects, which every island of it reuses (see `AddressMemo`). */
+  addressed?: AddressMemo;
+}
+
+// By the response's `sent` set, which lasts as long as the response.
+const responseMemos = new WeakMap<Set<string>, AddressMemo>();
+
+function getResponseMemo(sent: Set<string>): AddressMemo {
+  let memo = responseMemos.get(sent);
+  if (!memo) responseMemos.set(sent, (memo = new Map()));
+  return memo;
 }
 
 /** A promise in an island's props, and where its settled value continues. */
@@ -757,7 +769,11 @@ export function createIsland<P extends object>(
     }
 
     let encoded: ReturnType<IslandServerHook["encode"]>;
-    const context: IslandEncodeContext = { named: new Map(), nextSteps: new WeakMap() };
+    const context: IslandEncodeContext = {
+      named: new Map(),
+      nextSteps: new WeakMap(),
+      addressed: state ? getResponseMemo(state.sent) : undefined,
+    };
     let strategy = declared;
     const slots = createSlots(state?.held ?? null);
     const { render: renderProps, wire } = splitSlots(props, `${id}s`, slots);
