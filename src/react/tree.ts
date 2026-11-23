@@ -225,8 +225,6 @@ type StaticHtml =
   | { type: string; props: { [key: string]: TreeValue }; children: TreeValue; source?: never }
   | { type: string; props: { [key: string]: TreeValue }; source: unknown; children?: never };
 
-const hostSizes = /* @__PURE__ */ new WeakMap<object, number | null>();
-
 /** An attribute value React renders as it is: text, a finite number, or a `style` object of them. */
 function plainAttributeSize(value: unknown): number | null {
   if (value === null || typeof value === "boolean") return 5;
@@ -246,29 +244,30 @@ function plainAttributeSize(value: unknown): number | null {
 /**
  * The JSON length of a node's tree when it holds only host elements, fragments and text that React
  * renders as they are (no components, functions or tagged values), or null. The resolver leaves
- * such children unresolved: the server renders them as they came.
+ * such children unresolved: the server renders them as they came. `sizes` holds the answers for
+ * the elements met so far in this render.
  */
-function plainHostSize(node: unknown): number | null {
+function plainHostSize(node: unknown, sizes: Map<object, number | null>): number | null {
   if (node === null || node === undefined || typeof node === "boolean") return 5;
   if (typeof node === "string") return node.length + 2;
   if (typeof node === "number") return Number.isFinite(node) ? String(node).length : null;
   if (Array.isArray(node)) {
     let size = node.length + 1;
     for (const entry of node) {
-      const entrySize = plainHostSize(entry);
+      const entrySize = plainHostSize(entry, sizes);
       if (entrySize === null) return null;
       size += entrySize;
     }
     return size;
   }
   if (!React.isValidElement(node)) return null;
-  const known = hostSizes.get(node);
+  const known = sizes.get(node);
   if (known !== undefined) return known;
   let size: number | null = null;
   const type = node.type;
   const props = (node.props ?? {}) as Record<string, unknown>;
   if (type === React.Fragment) {
-    size = plainHostSize(props.children);
+    size = plainHostSize(props.children, sizes);
     if (size !== null) size += 12;
   } else if (typeof type === "string" && !DYNAMIC_HTML_TAGS.has(type)) {
     size = type.length + 30;
@@ -276,7 +275,7 @@ function plainHostSize(node: unknown): number | null {
       if (value === undefined || (name === "ref" && value === null)) continue;
       const valueSize =
         name === "children"
-          ? plainHostSize(value)
+          ? plainHostSize(value, sizes)
           : name === "ref" || typeof value === "function"
             ? null
             : plainAttributeSize(value);
@@ -287,7 +286,7 @@ function plainHostSize(node: unknown): number | null {
       size += name.length + valueSize + 4;
     }
   }
-  hostSizes.set(node, size);
+  sizes.set(node, size);
   return size;
 }
 
@@ -314,6 +313,12 @@ interface ResolveState {
    * props of its own (`asChild`, `render`): only rendering that component shows the part then.
    */
   clonableParts?: true;
+  /**
+   * plainHostSize's answers for this render, by element: the resolver asks again for the children
+   * of every element it walks into. A Map that ends with the render costs about a quarter of what
+   * writing every element of every page into a module-wide WeakMap did.
+   */
+  hostSizes?: Map<object, number | null>;
 }
 
 function isServerHtmlPart(value: TreeValue): boolean {
@@ -623,7 +628,7 @@ function resolveElementType(
       !DYNAMIC_HTML_TAGS.has(tag) &&
       props.children !== undefined &&
       !("dangerouslySetInnerHTML" in props)
-        ? plainHostSize(props.children)
+        ? plainHostSize(props.children, (state.hostSizes ??= new Map()))
         : null;
     return recover(
       () => {

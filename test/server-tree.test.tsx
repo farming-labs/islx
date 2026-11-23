@@ -1130,6 +1130,36 @@ describe("static HTML in server trees", () => {
     expect(container.querySelector("article")).toBe(article);
   });
 
+  it("remembers the sizes of a static subtree's elements for one render only", async () => {
+    const words = Array.from({ length: 200 }, (_, index) => `word${index}`);
+    async function Page() {
+      return (
+        <>
+          <article id="long">
+            {words.map((word) => (
+              <p key={word}>
+                <em>{word}</em>
+              </p>
+            ))}
+          </article>
+          <PageButton label="tree" />
+        </>
+      );
+    }
+    const writes = vi.spyOn(WeakMap.prototype, "set");
+    const page = await renderServerTree(<Page />, {});
+    const count = writes.mock.calls.length;
+    writes.mockRestore();
+    // The article's 400 elements are sized once per render, in a Map that ends with it: a
+    // module-wide WeakMap entry for each one cost a long page more than sizing it.
+    expect(count).toBeLessThan(20);
+    const stream = await renderToReadableStream(routeTree(page));
+    await stream.allReady;
+    const html = await new Response(stream).text();
+    expect(html.split("<em>word199</em>")).toHaveLength(2);
+    expect(html).toMatch(/<article id="long" f-html="\d+"><p><em>word0<\/em><\/p>/);
+  });
+
   it("keeps static children a client component renders only later in its template", async () => {
     async function Page() {
       return (
