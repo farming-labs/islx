@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.0.26
 
 - An island carries React's client reference marker (`$$typeof` is
   `Symbol.for("react.client.reference")`), as a `"use client"` export does under React Server
   Components. Code written for Server Components that walks an element tree outside a render, such
   as an MDX-to-Markdown converter, skips it instead of calling it and failing on its hooks.
+- A server tree keeps the sizes of its static elements for one render in a map that ends with it,
+  instead of writing every element of every page into a module-wide `WeakMap`. On a long guide page
+  in Farm's islands benchmark, server CPU per request drops by about a tenth.
 
 ## 0.0.25
 
