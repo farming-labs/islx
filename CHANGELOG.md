@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.27
+
+- Islands of one response encode a value they all receive once. A docs layout that passes its
+  navigation tree to a sidebar and a mobile menu no longer encodes the tree twice. Only values that
+  hold no action, slot, promise or cycle are reused, and never across responses. On the docs section
+  of Farm's islands benchmark, server CPU per request drops by about 15%.
+
 ## 0.0.26
 
 - An island carries React's client reference marker (`$$typeof` is
