@@ -76,8 +76,12 @@ export interface IslandRuntimeOptions {
 export interface IslandRuntime {
   /** Hydrates the islands under `scope` that are not hydrated or scheduled yet. */
   hydrate(scope?: ParentNode): Promise<void>;
-  /** Unmounts every island and drops the ones still waiting for their strategy. */
-  dispose(): void;
+  /**
+   * Unmounts the islands under `scope` (default: every island) and drops the ones under it still
+   * waiting for their strategy. A framework that swaps part of the page disposes that part, and
+   * the islands outside it keep running. Islands already removed from the document go too.
+   */
+  dispose(scope?: ParentNode): void;
 }
 
 function findPropsScript(container: Element, id: string): HTMLScriptElement | null {
@@ -251,10 +255,17 @@ export function createIslandRuntime(options: IslandRuntimeOptions): IslandRuntim
 
   return {
     hydrate,
-    dispose() {
-      for (const controller of pending.values()) controller.abort();
-      pending.clear();
-      for (const container of roots.keys()) unmount(container);
+    dispose(scope?: ParentNode) {
+      const within = (container: Element) =>
+        !scope || !container.isConnected || scope === container || scope.contains(container);
+      for (const [container, controller] of pending) {
+        if (!within(container)) continue;
+        controller.abort();
+        pending.delete(container);
+      }
+      for (const container of Array.from(roots.keys())) {
+        if (within(container)) unmount(container);
+      }
     },
   };
 }
