@@ -5,7 +5,6 @@
  * are React's, which handles them first.
  */
 import { readPostedAction, stripRuntimeFields } from "../protocol/wire";
-import { createServerReference } from "./actions";
 
 let enhanced = false;
 
@@ -62,7 +61,12 @@ export function enhanceForms(): void {
     event.preventDefault();
     stripRuntimeFields(data);
     form.setAttribute("aria-busy", "true");
-    const action = createServerReference(posted.id, posted.token);
+    // The call path loads with the first submit: a page that never submits never loads it.
+    // References queue their calls in order, so submits made while it loads keep theirs.
+    const reference = import("./actions").then(({ createServerReference }) =>
+      createServerReference(posted.id, posted.token),
+    );
+    const action = (formData: FormData) => reference.then((call) => call(formData));
     setStatus(form, { pending: true, data, method: form.method || "get", action });
     action(data)
       .then(() => form.reset())

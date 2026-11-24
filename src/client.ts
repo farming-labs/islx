@@ -5,15 +5,14 @@ export {
   valueHeaders,
   type ValueStore,
 } from "./client/value-store";
+export { createServerReference, decodeActionReference } from "./client/actions";
 export {
-  createServerReference,
-  decodeActionReference,
   setActionInterceptor,
   setActionNavigator,
   type ActionCall,
   type ActionInterceptor,
   type ActionNavigator,
-} from "./client/actions";
+} from "./client/action-state";
 export { enhanceForms } from "./client/forms";
 export {
   NAVIGATION_RENDER,

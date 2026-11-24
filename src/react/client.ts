@@ -10,11 +10,11 @@ export {
   PAYLOAD_ONLY_ATTRIBUTE,
   createServerTreeElement,
   createServerTreeLayout,
-  updateServerTrees,
   type ServerTreeElementOptions,
   type ServerTreeLayout,
   type ServerTreeLayoutOptions,
 } from "./tree";
+export { updateServerTrees } from "./tree-updates";
 export { isolateIslands, withinClientRoot } from "./island";
 export {
   HYDRATED_ATTRIBUTE,

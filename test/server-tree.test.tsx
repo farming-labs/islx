@@ -460,8 +460,10 @@ describe("server tree pages", () => {
     }
     const html = await renderPage(<Page />);
     expect(html).toContain('<f-island src="/src/cycle.tsx"');
-    const { container, errors } = await hydratePage(html);
+    const { container, errors, runtime } = await hydratePage(html);
     expect(errors).toEqual([]);
+    // Its props need the reviver, which loads before the island hydrates.
+    await vi.waitFor(() => expect(runtime.rootCount()).toBe(1));
     await click(container, "#cycle");
     expect(container.querySelector("#cycle")!.textContent).toBe("root true 1");
   });
