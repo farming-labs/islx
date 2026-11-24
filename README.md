@@ -234,6 +234,62 @@ unawaited to a client component streams in. Islands call Start server functions
 
 `examples/tanstack-start` runs in the e2e suite, in development and from its production build.
 
+## Islands for any renderer
+
+Experimental. The renderer writes a component's HTML with its own string renderer, and gives the
+browser one function, `hydrate`. islx does the rest: the island element, props through the codec,
+values sent once, server actions as props, the strategy, held clicks, and restoring the server
+HTML when a root throws.
+
+```ts
+// Server
+import { renderIslandMarkup } from "@farm.js/islx/islands/server";
+
+const html = renderIslandMarkup({
+  src: "/src/counter.ts",
+  export: "Counter",
+  strategy: "visible",
+  id: "i0", // unique in the response
+  props: { start: 1 },
+  html: renderToString(createElement(Counter, { start: 1 })), // the renderer's own
+  sent, // one Set per response, so a shared value goes once
+});
+
+// Browser
+import {
+  createIslandRuntime,
+  defineIslandRenderer,
+  scheduleHydration,
+} from "@farm.js/islx/islands/client";
+
+const renderer = defineIslandRenderer({
+  hydrate: (container, Component, props) => hydrateRoot(container, createElement(Component, props)),
+});
+createIslandRuntime({
+  renderer,
+  load: (src) => import(src),
+  schedule: scheduleHydration,
+}).hydrate();
+```
+
+`hydrate` also gets the island (`{ id, src, export, strategy }`). A renderer whose hydration keys
+are page-wide namespaces them with `id` on both sides: Solid renders with
+`renderToString(fn, { renderId: id })` and hydrates with `hydrate(fn, container, { renderId: id })`.
+A renderer's page bootstrap, such as Solid's `generateHydrationScript()`, goes in the document once;
+islx does not write it. Inline `PREHYDRATION_SCRIPT` (from `@farm.js/islx/client`) in the page too,
+so a click that lands before the runtime loads is held and replayed.
+
+Solid 1.9 hydrates only until the page's first delegated event: an island that wakes after it gets
+fresh DOM from Solid instead of keeping the server's.
+
+`examples/renderers` has the adapter for Preact, Vue, Svelte and Solid, about ten lines each. The
+e2e suite runs it in Chrome, in development and from its production build: each renderer's
+islands keep the server's DOM, decode typed props, replay a held click once, and wait for their
+strategy.
+
+Not in this runtime yet: slots (server output as children), promise props, server trees and
+`useActionState` form state. They stay in `@farm.js/islx/react`.
+
 ## In a framework
 
 A framework that renders pages itself (Farm does) uses the pieces directly instead of

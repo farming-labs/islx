@@ -10,6 +10,8 @@ export default defineConfig({
     react: "src/react.ts",
     "react/server": "src/react/server.ts",
     "react/client": "src/react/client.ts",
+    "islands/server": "src/islands/server.ts",
+    "islands/client": "src/islands/client.ts",
     vite: "src/vite.ts",
     "tanstack-start": "src/tanstack-start/index.ts",
     "tanstack-start/server": "src/tanstack-start/server.ts",

@@ -248,7 +248,8 @@ islx is layered so each framework needs only a thin integration:
 | Wire format and codec                                    | `@farm.js/islx`                                                                                | nothing (Web APIs) |
 | Server: values, sealing, action handling                 | `@farm.js/islx/server`                                                                         | `@farm.js/islx`    |
 | Browser: value store, hydration, navigation              | `@farm.js/islx/client`                                                                         | `@farm.js/islx`    |
-| Renderer adapters                                        | `@farm.js/islx/react` (then Preact, Vue, Svelte, Solid)                                        | the renderer       |
+| Islands for any renderer (experimental)                  | `@farm.js/islx/islands/server`, `@farm.js/islx/islands/client`: the renderer gives `hydrate`   | `@farm.js/islx`    |
+| Renderer adapters                                        | `@farm.js/islx/react` (slots, promise props, server trees, form state)                         | the renderer       |
 | Compiler: `"use client"`, `"use server"`, inline actions | `@farm.js/islx/compiler`                                                                       | a parser           |
 | Bundler plugins                                          | `@farm.js/islx/vite`, `@farm.js/islx/webpack`, `@farm.js/islx/rollup`, `@farm.js/islx/esbuild` | the compiler       |
 | Frameworks                                               | `@farm.js/islx/next`, `@farm.js/islx/astro`, `@farm.js/islx/nuxt`, …                           | the above          |
