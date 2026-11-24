@@ -272,6 +272,18 @@ createIslandRuntime({
 }).hydrate();
 ```
 
+A renderer that builds elements instead of strings, or renders the island inline in its page, takes
+the same markup in parts with `resolveIslandMarkup` (same input, without `html`). It returns the
+value scripts to write first, the element to put around the component, and the props script to
+write after it. Attribute values come unescaped, for the renderer to escape as it writes any
+attribute. Script text is already escaped and goes in raw.
+
+```ts
+const { values, element, script } = resolveIslandMarkup({ src, export, strategy, id, props, sent });
+// element: { tag: "f-island", attributes: { src, export, props: id, strategy, style: "display:contents" } }
+// script:  { attributes: { type: "f/props", for: id }, text: '{"start":1}' }
+```
+
 `hydrate` also gets the island (`{ id, src, export, strategy }`). A renderer whose hydration keys
 are page-wide namespaces them with `id` on both sides: Solid renders with
 `renderToString(fn, { renderId: id })` and hydrates with `hydrate(fn, container, { renderId: id })`.
