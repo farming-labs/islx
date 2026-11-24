@@ -63,6 +63,14 @@
       "types": "./dist/react/client.d.mts",
       "default": "./dist/react/client.mjs"
     },
+    "./islands/server": {
+      "types": "./dist/islands/server.d.mts",
+      "default": "./dist/islands/server.mjs"
+    },
+    "./islands/client": {
+      "types": "./dist/islands/client.d.mts",
+      "default": "./dist/islands/client.mjs"
+    },
     "./vite": {
       "types": "./dist/vite.d.mts",
       "default": "./dist/vite.mjs"
