@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.30
+
+- `dispose(scope)` on the runtime from `createIslandRuntime` (`@farm.js/islx/islands/client`)
+  unmounts only the islands under `scope`, and drops the ones there still waiting for their
+  strategy. Islands already removed from the document go too. A framework that swaps part of a
+  page on navigation disposes that part and keeps the rest running. Without a scope it disposes
+  every island, as before.
+
 ## 0.0.29
 
 - `resolveIslandMarkup` (`@farm.js/islx/islands/server`) returns an island's markup in parts: the
