@@ -10,6 +10,8 @@
 import { decode, encode, type EncodeOptions } from "../protocol/codec";
 import { emit } from "./hooks";
 import { readStreamedResult } from "./result-stream";
+import { state, type ClientReference } from "./action-state";
+import { getActionElementReviver, type RenderedElementsPayload } from "./element-reviver";
 import {
   ACTION_HEADER,
   ACTION_STALE_HEADER,
@@ -31,72 +33,13 @@ import {
 
 type AnyFunction = (...args: any[]) => any;
 
-/** How actions reach the framework's router. */
-export interface ActionNavigator {
-  /** Renders the current page again from the server, keeping client state and scroll. */
-  refresh?(): Promise<void> | void;
-  /** A client navigation to `href`, as the action's redirect. */
-  navigate?(href: string): Promise<void> | void;
-}
-
-interface ClientReference {
-  id: string;
-  token?: string;
-  bound: unknown[];
-  /** The action's name, for hooks: the export name of an imported action. */
-  name?: string;
-  /** Set by a call answered with a redirect, for the `actionEnd` hook. */
-  redirect?: string;
-}
-
-const STATE_KEY = Symbol.for("islx.actions.client");
-
-/** A call of a server action, as an interceptor sees it. */
-export interface ActionCall {
-  id: string;
-  /** The export (or inline function) name, when known. */
-  name?: string;
-  /** The arguments, after any bound with `.bind`. */
-  args: readonly unknown[];
-}
-
-/**
- * Wraps every server action call: call `next` to make the request, and return what the caller
- * gets. A framework uses it to unwrap what its own server side adds to a result (cache
- * invalidations, a query's cache entry) or to turn a returned error back into one it throws.
- */
-export type ActionInterceptor = (
-  call: ActionCall,
-  next: () => Promise<unknown>,
-) => Promise<unknown>;
-
-interface ClientState {
-  interceptor?: ActionInterceptor;
-  navigator: ActionNavigator;
-  queue: Promise<unknown>;
-  references: Map<string, AnyFunction>;
-  info: WeakMap<object, ClientReference>;
-}
-
-function state(): ClientState {
-  const scope = globalThis as typeof globalThis & Record<symbol, ClientState | undefined>;
-  return (scope[STATE_KEY] ??= {
-    navigator: {},
-    queue: Promise.resolve(),
-    references: new Map(),
-    info: new WeakMap(),
-  });
-}
-
-/** Connects actions to the framework's router. */
-export function setActionNavigator(navigator: ActionNavigator): void {
-  state().navigator = navigator;
-}
-
-/** Installs the framework's interceptor for server action calls (one; a later call replaces it). */
-export function setActionInterceptor(interceptor: ActionInterceptor | undefined): void {
-  state().interceptor = interceptor;
-}
+export {
+  setActionInterceptor,
+  setActionNavigator,
+  type ActionCall,
+  type ActionInterceptor,
+  type ActionNavigator,
+} from "./action-state";
 
 /**
  * Encodes an action passed back to the server as an argument, with the arguments it was bound to
@@ -131,25 +74,7 @@ export function decodeActionReference(object: Record<string, unknown>): AnyFunct
   return createServerReference(object[TAG_VALUE], token);
 }
 
-/** Elements an action returned, as the server rendered them (`ELEMENT_TAG`). */
-export interface RenderedElementsPayload {
-  /** The scope of their server tree. */
-  s: string;
-  /** Their server HTML, with the tree. */
-  h: string;
-}
-
-const ELEMENT_REVIVER = Symbol.for("islx.client.element-reviver");
-
-/**
- * @internal Rebuilds the elements an action returned. The React hydration runtime installs it,
- * with the module loader it hydrates islands with.
- */
-export function setActionElementReviver(
-  revive: (payload: RenderedElementsPayload) => Promise<unknown>,
-): void {
-  (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] = revive;
-}
+export { setActionElementReviver, type RenderedElementsPayload } from "./element-reviver";
 
 /** The elements in a result, rebuilt, by the payload object that carried them. */
 async function reviveElements(value: unknown): Promise<Map<object, unknown>> {
@@ -165,9 +90,7 @@ async function reviveElements(value: unknown): Promise<Map<object, unknown>> {
   walk(value);
   const revived = new Map<object, unknown>();
   if (found.length === 0) return revived;
-  const revive = (globalThis as Record<symbol, unknown>)[ELEMENT_REVIVER] as
-    | ((payload: RenderedElementsPayload) => Promise<unknown>)
-    | undefined;
+  const revive = getActionElementReviver();
   if (!revive) throw new Error("the action returned elements, which need islx's React runtime");
   await Promise.all(
     found.map(async (object) => {

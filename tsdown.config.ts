@@ -23,5 +23,22 @@ export default defineConfig({
   external: [/^node:/, "estree-walker", "is-reference", "magic-string", "periscopic", "react", /^react\//, "react-dom", /^react-dom\//, "vite", "oxc-parser", /^virtual:/, /^@vitejs\//, /^@tanstack\//, /^@farm\.js\/islx/],
   outputOptions: {
     chunkFileNames: (chunk) => (chunk.isEntry ? "[name].mjs" : "_chunks/[name]-[hash].mjs"),
+    // One chunk per browser module, so an app's bundler can leave out of a page's first load
+    // whatever only a later call imports (the reviver, slot trees, the action client): a bundler
+    // places a module's code by the files it comes in, not by the exports it uses.
+    codeSplitting: {
+      // A module's own chunk, not its imports': those get theirs.
+      includeDependenciesRecursively: false,
+      groups: [
+        {
+          debugName: "browser modules",
+          name: (id) => {
+            const module = /[\\/]src[\\/]((?:client|protocol|react)[\\/][\w-]+)\.ts$/.exec(id)?.[1];
+            if (!module || /^react[\\/](?:client|server)$/.test(module)) return null;
+            return module.replace(/[\\/]/g, "-");
+          },
+        },
+      ],
+    },
   },
 });

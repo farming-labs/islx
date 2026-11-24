@@ -21,6 +21,7 @@ import {
   type StreamKind,
   type StreamStep,
 } from "../protocol/stream";
+import { getContexts } from "./contexts";
 import { IdProbe, type IdRecord } from "./ids";
 import { renderSlotTree, type SlotTree } from "./tree";
 import {
@@ -116,21 +117,8 @@ export function getClientReference(type: unknown): ClientReference | undefined {
   return (type as Record<symbol, ClientReference | undefined>)[CLIENT_REFERENCE];
 }
 
-/**
- * Makes `element`'s client components part of the React root around it (a layout that hydrates
- * as one root), instead of islands of their own.
- */
-export function withinClientRoot(element: React.ReactNode): React.ReactElement {
-  return React.createElement(getContexts().graph.Provider, { value: true }, element);
-}
-
-/**
- * Starts islands again below a `withinClientRoot`: the page a hydrating layout keeps as server
- * HTML renders its client components as islands of their own.
- */
-export function isolateIslands(element: React.ReactNode): React.ReactElement {
-  return React.createElement(getContexts().graph.Provider, { value: false }, element);
-}
+// Kept in their own module, so a page that hydrates islands loads them without the rest of this one.
+export { getContexts, isolateIslands, withinClientRoot } from "./contexts";
 
 const RENDER_STATE_RESOLVER = Symbol.for("islx.react.render-state");
 
@@ -198,32 +186,6 @@ export interface IslandRenderState {
 
 /** Tagged objects the runtime made (slots), as opposed to app data with a "$" key. */
 export const runtimeTagged = new WeakSet<object>();
-
-// One per React copy on the page, shared by every copy of this module.
-const CONTEXTS = Symbol.for("islx.react.contexts");
-type Contexts = {
-  graph: React.Context<boolean>;
-  render: React.Context<IslandRenderState | null>;
-  /** The element an island hydrated into, in the browser. */
-  container: React.Context<Element | null>;
-};
-
-/** @internal */
-export function getContexts(): Contexts {
-  const scope = globalThis as typeof globalThis &
-    Record<symbol, WeakMap<object, Contexts> | undefined>;
-  const all = (scope[CONTEXTS] ??= new WeakMap());
-  let contexts = all.get(React.createElement);
-  if (!contexts) {
-    contexts = {
-      graph: React.createContext(false),
-      render: React.createContext<IslandRenderState | null>(null),
-      container: React.createContext<Element | null>(null),
-    };
-    all.set(React.createElement, contexts);
-  }
-  return contexts;
-}
 
 function isElement(value: unknown): value is React.ReactElement {
   const type = (value as { $$typeof?: symbol } | null)?.$$typeof;

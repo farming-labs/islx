@@ -27,6 +27,7 @@ import {
 import { createServerReference } from "../client/actions";
 import { getValueStore, type ValueStore } from "../client/value-store";
 import { getClientReference, getIslandServerHook, isolateIslands } from "./island";
+import { treeListeners, type TreeUpdateListener } from "./tree-updates";
 
 const MEMO_TYPE = Symbol.for("react.memo");
 const FORWARD_REF_TYPE = Symbol.for("react.forward_ref");
@@ -1387,23 +1388,7 @@ function collectReferences(value: TreeValue, references: Set<string>): void {
   for (const entry of Object.values(value)) collectReferences(entry, references);
 }
 
-// Hot updates reach mounted server trees. Shared through globalThis, so a tree and the island
-// runtime see one registry even when the bundler gives them separate copies of this module.
-type TreeUpdateListener = (src: string, module: Record<string, unknown>) => boolean;
-const TREE_UPDATES = Symbol.for("islx.react.tree-updates");
-
-function treeListeners(): Set<TreeUpdateListener> {
-  const scope = globalThis as typeof globalThis &
-    Record<symbol, Set<TreeUpdateListener> | undefined>;
-  return (scope[TREE_UPDATES] ??= new Set());
-}
-
-/** Re-renders mounted server trees that render a hot-updated client module. */
-export function updateServerTrees(src: string, module: Record<string, unknown>): number {
-  let updated = 0;
-  for (const listener of treeListeners()) if (listener(src, module)) updated++;
-  return updated;
-}
+export { updateServerTrees } from "./tree-updates";
 
 export interface ServerTreeElementOptions {
   /** Imports a client module, as the hydration runtime's `load`. */
