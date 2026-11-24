@@ -6,7 +6,11 @@ import {
   scheduleHydration,
   type IslandRenderer,
 } from "@farm.js/islx/islands/client";
-import { renderIslandMarkup } from "@farm.js/islx/islands/server";
+import {
+  renderIslandMarkup,
+  resolveIslandMarkup,
+  type IslandMarkupParts,
+} from "@farm.js/islx/islands/server";
 import { createValueStore } from "@farm.js/islx/client";
 
 /**
@@ -132,6 +136,66 @@ describe("renderIslandMarkup", () => {
   });
 });
 
+describe("resolveIslandMarkup", () => {
+  it("returns the parts renderIslandMarkup writes, with attributes left for the renderer to escape", () => {
+    const input = {
+      src: '/src/a&b".ts',
+      export: "Counter",
+      strategy: "idle" as const,
+      id: "i0",
+      props: { text: "</script>", since: counterProps.since },
+    };
+    const parts = resolveIslandMarkup(input);
+
+    expect(parts.values).toEqual([]);
+    expect(parts.element).toEqual({
+      tag: "f-island",
+      attributes: {
+        src: '/src/a&b".ts',
+        export: "Counter",
+        props: "i0",
+        strategy: "idle",
+        style: "display:contents",
+      },
+    });
+    expect(parts.script.attributes).toEqual({ type: "f/props", for: "i0" });
+    expect(parts.script.text).not.toContain("</script>");
+    expect(JSON.parse(parts.script.text)).toEqual({
+      text: "</script>",
+      since: { $: "D", v: "2026-11-23T10:00:00.000Z" },
+    });
+    expect(renderIslandMarkup({ ...input, html: "<b>x</b>" })).toBe(
+      '<f-island src="/src/a&amp;b&quot;.ts" export="Counter" props="i0" strategy="idle" style="display:contents">' +
+        `<b>x</b></f-island><script type="f/props" for="i0">${parts.script.text}</script>`,
+    );
+  });
+
+  it("returns a shared value's script once per response", () => {
+    const rows = Array.from({ length: 40 }, (_, index) => ({ id: index, name: `row ${index}` }));
+    const sent = new Set<string>();
+    const first = resolveIslandMarkup({ src: "/a.ts", id: "i0", props: { rows }, sent });
+    const second = resolveIslandMarkup({ src: "/b.ts", id: "i1", props: { rows }, sent });
+
+    expect(first.values).toHaveLength(1);
+    expect(first.values[0]!.attributes).toEqual({ type: "f/value", name: [...sent][0] });
+    expect(second.values).toEqual([]);
+    expect(second.script.text).toContain('{"$":"r"');
+  });
+
+  it("refuses a function prop and names the island, as renderIslandMarkup does", () => {
+    expect(() =>
+      resolveIslandMarkup({
+        src: "/src/counter.ts",
+        export: "Counter",
+        id: "i0",
+        props: { onChange: function onChange() {} },
+      }),
+    ).toThrow(
+      "Counter (/src/counter.ts) cannot get its props in the browser: functions are not serializable (onChange)",
+    );
+  });
+});
+
 describe("createIslandRuntime", () => {
   it("hydrates an island with a renderer that is not React, keeping the server's DOM", async () => {
     serverPage(
@@ -166,6 +230,48 @@ describe("createIslandRuntime", () => {
     expect(document.querySelector("f-island")!.hasAttribute("hydrated")).toBe(true);
     expect(hydrated).toHaveBeenCalledTimes(1);
     document.removeEventListener("f:hydrate", hydrated);
+  });
+
+  it("hydrates an island a renderer built as elements from resolveIslandMarkup's parts", async () => {
+    const parts: IslandMarkupParts = resolveIslandMarkup({
+      src: "/src/counter.ts",
+      export: "Counter",
+      id: "i0",
+      props: counterProps as unknown as Record<string, unknown>,
+    });
+    // What an element-building renderer does with the parts: set the attributes as they are, and
+    // write the script text raw.
+    const build = (tag: string, attributes: Record<string, string>, html: string) => {
+      const element = document.createElement(tag);
+      for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+      element.innerHTML = html;
+      return element;
+    };
+    const main = document.createElement("main");
+    main.append(
+      ...parts.values.map((value) => build("script", value.attributes, value.text)),
+      build(parts.element.tag, parts.element.attributes, Counter.render(counterProps)),
+      build("script", parts.script.attributes, parts.script.text),
+    );
+    document.body.append(main);
+    const serverButton = document.querySelector("button")!;
+    let received: Record<string, unknown> | undefined;
+
+    await runtimeFor(
+      { "/src/counter.ts": { Counter } },
+      defineIslandRenderer({
+        hydrate(container, component, props) {
+          received = props;
+          return tiny.hydrate(container, component, props);
+        },
+      }),
+    ).hydrate();
+
+    expect(document.querySelector("button")).toBe(serverButton);
+    serverButton.click();
+    expect(serverButton.textContent).toBe("3");
+    expect(received!.since).toEqual(counterProps.since);
+    expect(received!.tags).toEqual(counterProps.tags);
   });
 
   it("tells the renderer which island it hydrates, so page-wide keys can be namespaced", async () => {
