@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.28
+
+- A page whose islands take plain JSON props hydrates without the code that revives the rest:
+  slots, server trees, actions, promises, streams, tagged values and form state. The runtime loads
+  it with the first island, form state or action result that needs it. A form in a server
+  component loads the action call path on its first submit. The dist has one chunk per browser
+  module, so an app's bundler can leave both out of a page's first load. On the dash page of
+  Farm's islands benchmark, islx's first-load code goes from 13.2 to 6.2 KB brotli, and the page
+  is fully hydrated 32 ms sooner at 1.6 Mbit/s.
+- Islands for any renderer. `@farm.js/islx/islands/server` wraps HTML from any renderer's string
+  renderer in the island element and its props (`renderIslandMarkup`), and
+  `@farm.js/islx/islands/client` hydrates it with a renderer's one `hydrate` function
+  (`createIslandRuntime`, `defineIslandRenderer`). Strategies, held clicks, the codec's tagged
+  values, values sent once and server actions work as they do with React. `examples/renderers`
+  has adapters for Preact, Vue, Svelte and Solid. Slots, promise props, server trees and form
+  state stay in `@farm.js/islx/react`, which is unchanged.
+
 ## 0.0.27
 
 - Islands of one response encode a value they all receive once. A docs layout that passes its
