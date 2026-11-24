@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.29
+
+- `resolveIslandMarkup` (`@farm.js/islx/islands/server`) returns an island's markup in parts: the
+  value scripts to write first, the `<f-island>` element with its attributes unescaped, and the
+  props script with its text escaped. A renderer that builds elements, or renders an island inside
+  its page's own render, can write the wire format without going through a string.
+  `renderIslandMarkup` joins the same parts, and its output is unchanged.
+
 ## 0.0.28
 
 - A page whose islands take plain JSON props hydrates without the code that revives the rest:
