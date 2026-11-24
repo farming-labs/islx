@@ -272,6 +272,11 @@ createIslandRuntime({
 }).hydrate();
 ```
 
+`hydrate(scope)` starts the islands under `scope` that aren't started yet. `dispose(scope)` unmounts
+the islands under `scope` and drops the ones still waiting for their strategy, so a framework that
+swaps part of the page disposes that part and the rest keep running. Without a scope, both cover
+the whole page.
+
 A renderer that builds elements instead of strings, or renders the island inline in its page, takes
 the same markup in parts with `resolveIslandMarkup` (same input, without `html`). It returns the
 value scripts to write first, the element to put around the component, and the props script to

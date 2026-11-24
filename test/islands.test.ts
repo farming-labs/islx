@@ -436,4 +436,88 @@ describe("createIslandRuntime", () => {
 
     expect(button.textContent).toBe("2");
   });
+
+  it("disposes only the islands under the scope it is given", async () => {
+    const island = (id: string) =>
+      renderIslandMarkup({
+        src: "/src/counter.ts",
+        export: "Counter",
+        id,
+        props: counterProps as unknown as Record<string, unknown>,
+        html: Counter.render(counterProps),
+      });
+    document.body.innerHTML = `<header>${island("i0")}</header><main>${island("i1")}</main>`;
+    const runtime = runtimeFor({ "/src/counter.ts": { Counter } });
+    await runtime.hydrate();
+    const kept = document.querySelector<HTMLButtonElement>("header button")!;
+    const swapped = document.querySelector<HTMLButtonElement>("main button")!;
+
+    runtime.dispose(document.querySelector("main")!);
+    kept.click();
+    swapped.click();
+
+    expect(kept.textContent).toBe("3");
+    expect(swapped.textContent).toBe("2");
+  });
+
+  it("hydrates a scope again after disposing it, without touching the islands outside it", async () => {
+    const island = (id: string) =>
+      renderIslandMarkup({
+        src: "/src/counter.ts",
+        export: "Counter",
+        id,
+        props: counterProps as unknown as Record<string, unknown>,
+        html: Counter.render(counterProps),
+      });
+    document.body.innerHTML = `<header>${island("i0")}</header><main>${island("i1")}</main>`;
+    const hydrated: string[] = [];
+    const runtime = runtimeFor(
+      { "/src/counter.ts": { Counter } },
+      defineIslandRenderer({
+        hydrate(container, component, props, { id }) {
+          hydrated.push(id);
+          return tiny.hydrate(container, component, props);
+        },
+      }),
+    );
+    await runtime.hydrate();
+    const main = document.querySelector("main")!;
+
+    // What a navigation does: dispose the part it replaces, swap it, hydrate the new part.
+    runtime.dispose(main);
+    main.innerHTML = island("i2");
+    await runtime.hydrate(main);
+
+    expect(hydrated).toEqual(["i0", "i1", "i2"]);
+    main.querySelector("button")!.click();
+    expect(main.querySelector("button")!.textContent).toBe("3");
+  });
+
+  it("drops an island still waiting for its strategy when its scope is disposed", async () => {
+    serverPage(
+      renderIslandMarkup({
+        src: "/src/counter.ts",
+        export: "Counter",
+        strategy: "interaction",
+        id: "i0",
+        props: counterProps as unknown as Record<string, unknown>,
+        html: Counter.render(counterProps),
+      }),
+    );
+    const load = vi.fn(async () => ({ Counter }));
+    const runtime = createIslandRuntime({
+      renderer: tiny,
+      load,
+      schedule: scheduleHydration,
+      values: createValueStore(),
+      report: vi.fn(),
+    });
+    const hydrating = runtime.hydrate();
+
+    runtime.dispose(document.querySelector("main")!);
+    document.querySelector("button")!.click();
+    await hydrating;
+
+    expect(load).not.toHaveBeenCalled();
+  });
 });
