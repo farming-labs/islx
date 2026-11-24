@@ -276,10 +276,16 @@ createIslandRuntime({
 are page-wide namespaces them with `id` on both sides: Solid renders with
 `renderToString(fn, { renderId: id })` and hydrates with `hydrate(fn, container, { renderId: id })`.
 A renderer's page bootstrap, such as Solid's `generateHydrationScript()`, goes in the document once;
-islx does not write it.
+islx does not write it. Inline `PREHYDRATION_SCRIPT` (from `@farm.js/islx/client`) in the page too,
+so a click that lands before the runtime loads is held and replayed.
 
 Solid 1.9 hydrates only until the page's first delegated event: an island that wakes after it gets
 fresh DOM from Solid instead of keeping the server's.
+
+`examples/renderers` has the adapter for Preact, Vue, Svelte and Solid, about ten lines each. The
+e2e suite runs it in Chrome, in development and from its production build: each renderer's
+islands keep the server's DOM, decode typed props, replay a held click once, and wait for their
+strategy.
 
 Not in this runtime yet: slots (server output as children), promise props, server trees and
 `useActionState` form state. They stay in `@farm.js/islx/react`.

@@ -3,6 +3,7 @@ import { defineConfig } from "@playwright/test";
 // The example apps, served from their production builds and from Vite's dev servers.
 const example = "examples/react";
 const tanstack = "examples/tanstack-start";
+const renderers = "examples/renderers";
 // TanStack Start renders everything before sending it to a bot, and HeadlessChrome counts as one:
 // the TanStack projects browse as desktop Chrome, so pages stream as they do for people.
 const desktopChrome =
@@ -14,8 +15,16 @@ export default defineConfig({
   workers: 1,
   use: { channel: process.env.PLAYWRIGHT_CHANNEL || "chrome" },
   projects: [
-    { name: "production", testIgnore: /tanstack/, use: { baseURL: "http://localhost:4311" } },
-    { name: "development", testIgnore: /tanstack/, use: { baseURL: "http://localhost:4312" } },
+    {
+      name: "production",
+      testIgnore: /tanstack|renderers/,
+      use: { baseURL: "http://localhost:4311" },
+    },
+    {
+      name: "development",
+      testIgnore: /tanstack|renderers/,
+      use: { baseURL: "http://localhost:4312" },
+    },
     {
       name: "tanstack-start production",
       testMatch: /tanstack/,
@@ -25,6 +34,16 @@ export default defineConfig({
       name: "tanstack-start development",
       testMatch: /tanstack/,
       use: { baseURL: "http://localhost:4322", userAgent: desktopChrome },
+    },
+    {
+      name: "renderers production",
+      testMatch: /renderers/,
+      use: { baseURL: "http://localhost:4331" },
+    },
+    {
+      name: "renderers development",
+      testMatch: /renderers/,
+      use: { baseURL: "http://localhost:4332" },
     },
   ],
   webServer: [
@@ -49,6 +68,18 @@ export default defineConfig({
     {
       command: `pnpm --dir ${tanstack} exec vite dev --port 4322 --strictPort`,
       url: "http://localhost:4322/",
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `pnpm --dir ${renderers} build && PORT=4331 node ${renderers}/server.mjs`,
+      url: "http://localhost:4331/",
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command: `PORT=4332 node ${renderers}/server.mjs --dev`,
+      url: "http://localhost:4332/",
       reuseExistingServer: false,
       timeout: 120_000,
     },

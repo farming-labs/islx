@@ -1,0 +1,24 @@
+{
+  "name": "islx-example-renderers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs --dev",
+    "build": "vite build",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@farm.js/islx": "workspace:*",
+    "preact": "11.2.0",
+    "preact-render-to-string": "6.8.3",
+    "solid-js": "1.9.20",
+    "svelte": "5.59.1",
+    "vue": "3.5.46"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@vitejs/plugin-vue": "6.0.11",
+    "vite": "8.3.5",
+    "vite-plugin-solid": "2.11.17"
+  }
+}
